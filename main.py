@@ -29,4 +29,4 @@ def get_open_contracts():
         }
 
     except Exception as e:
-        return {"error": str(e)
+        return {"error": str(e)}
