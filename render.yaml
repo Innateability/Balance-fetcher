@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bybit-contracts-checker
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: BYBIT_API_KEY
+        value: your_api_key_here
+      - key: BYBIT_API_SECRET
+        value: your_api_secret_here
