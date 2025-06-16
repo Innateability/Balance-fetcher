@@ -5,28 +5,34 @@ import os
 app = FastAPI()
 
 # === ENV VARIABLES ===
-API_KEY = os.getenv("BYBIT_API_KEY")
-API_SECRET = os.getenv("BYBIT_API_SECRET")
+MAIN_API_KEY = os.getenv("MAIN_API_KEY")
+MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
+SUB_API_KEY = os.getenv("SUB_API_KEY")
+SUB_API_SECRET = os.getenv("SUB_API_SECRET")
 
-# === BYBIT SESSION ===
-session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
+# === BYBIT SESSIONS ===
+main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
+sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
-# === ENDPOINT: Fetch Open TRXUSDT Contracts ===
-@app.get("/contracts")
-def get_open_contracts():
+# === Fetch Open Contracts for a Session ===
+def fetch_contracts(session, symbol="TRXUSDT", category="linear"):
     try:
-        symbol = "TRXUSDT"
-        category = "linear"
-        
-        positions = session.get_positions(category=category, symbol=symbol)
-        data = positions['result']['list'][0]
-
-        contracts = float(data['size'])  # Size = number of contracts
-
-        return {
-            "symbol": symbol,
-            "open_contracts": contracts
-        }
-
+        response = session.get_positions(category=category, symbol=symbol)
+        positions = response.get("result", {}).get("list", [])
+        total_contracts = sum(float(pos["size"]) for pos in positions if pos["symbol"] == symbol)
+        return total_contracts
     except Exception as e:
-        return {"error": str(e)}
+        return f"Error: {str(e)}"
+
+# === Endpoint: GET /contracts ===
+@app.get("/contracts")
+def get_all_contracts():
+    main_contracts = fetch_contracts(main_session)
+    sub_contracts = fetch_contracts(sub_session)
+
+    return {
+        "symbol": "TRXUSDT",
+        "main_account_contracts": main_contracts,
+        "sub_account_contracts": sub_contracts
+    }
+    
