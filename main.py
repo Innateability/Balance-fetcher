@@ -44,4 +44,4 @@ def close_all_positions():
 
 # === Run it ===
 if __name__ == "__main__":
-    close_all_positions(
+    close_all_positions()
