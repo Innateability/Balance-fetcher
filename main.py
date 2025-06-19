@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request
 from pybit.unified_trading import HTTP
 import os
-import time
 
 app = FastAPI()
 
@@ -13,8 +12,18 @@ SUB_API_SECRET = os.getenv("SUB_API_SECRET")
 SUB_UID = os.getenv("SUB_UID")
 
 # === BYBIT SESSIONS ===
-main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET), 
+main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
+
+# === Get USDT balance ===
+def get_usdt_balance(session):
+    try:
+        data = session.get_wallet_balance(accountType="UNIFIED")
+        coins = data["result"]["list"][0]["coin"]
+        usdt = next((c for c in coins if c["coin"] == "USDT"), None)
+        return float(usdt["equity"]) if usdt else 0.0
+    except:
+        return 0.0
 
 # === Rebalance Funds ===
 def rebalance_funds():
@@ -41,36 +50,6 @@ def rebalance_funds():
         print("🔁 Rebalanced funds between main and sub accounts")
     except Exception as e:
         print("❌ Rebalance failed:", e)
-        
-
-        # Make the transfer
-        if direction == "MAIN_TO_SUB":
-            main_session.create_internal_transfer(
-                transferType=1,
-                coin="USDT",
-                amount=str(transfer_amount),
-                from_member_id=None,
-                to_member_id=None,
-                from_account_type="UNIFIED",
-                to_account_type="UNIFIED",
-                to_sub_account_uid=sub_session.get_sub_uid()["result"]["subMemberIds"][0],
-            )
-        else:
-            sub_session.create_internal_transfer(
-                transferType=1,
-                coin="USDT",
-                amount=str(transfer_amount),
-                from_member_id=None,
-                to_member_id=None,
-                from_account_type="UNIFIED",
-                to_account_type="UNIFIED",
-                to_sub_account_uid=None,
-                to_main_account_uid=main_session.get_main_uid()["result"]["uid"],
-            )
-
-        print("✅ Rebalance complete.")
-    except Exception as e:
-        print("❌ Rebalance failed:", str(e))
 
 # === Close all trades ===
 def close_trades(session, label="Main"):
@@ -117,8 +96,6 @@ async def receive_signal(request: Request):
 
         symbol = lines[0].strip().upper()
         type_line = lines[1].lower()
-        tp_line = lines[2].lower()
-        sl_line = lines[3].lower() if len(lines) > 3 else ""
 
         if symbol != "TRXUSDT":
             return {"error": "Unsupported symbol"}
@@ -131,7 +108,7 @@ async def receive_signal(request: Request):
             return {"error": "Unknown signal type"}
 
         if closed:
-            rebalance()
+            rebalance_funds()
             return {"status": "Trades closed and balance rebalanced"}
         else:
             return {"status": "No trades to close"}
@@ -143,4 +120,4 @@ async def receive_signal(request: Request):
 # === Health Check ===
 @app.get("/")
 def root():
-    return {"status": "Bot is online"}
+    return {"status": "Bot is online"
