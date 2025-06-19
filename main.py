@@ -13,7 +13,8 @@ SUB_API_SECRET = os.getenv("SUB_API_SECRET")
 SUB_UID = os.getenv("SUB_UID")
 
 # === BYBIT SESSIONS ===
-main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET), sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
+main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET), 
+sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
 # === Rebalance Funds ===
 def rebalance_funds():
