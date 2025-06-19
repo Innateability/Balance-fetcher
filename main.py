@@ -10,27 +10,37 @@ MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
+SUB_UID = os.getenv("SUB_UID")
 
 # === BYBIT SESSIONS ===
-main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
-sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
+main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET), sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
 # === Rebalance Funds ===
-def rebalance():
+def rebalance_funds():
     try:
-        main_balance = float(main_session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-        sub_balance = float(sub_session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-        total = main_balance + sub_balance
+        main = get_usdt_balance(main_session)
+        sub = get_usdt_balance(sub_session)
+        total = main + sub
         target = total / 2
 
-        if abs(main_balance - sub_balance) < 0.1:
+        if abs(main - sub) < 0.1:
             print("✅ Balance already even.")
             return
 
-        transfer_amount = abs(main_balance - target)
-        direction = "SUB_TO_MAIN" if sub_balance > target else "MAIN_TO_SUB"
+        amount = abs(main - target)
+        transfer_type = "MAIN_SUB" if main > target else "SUB_MAIN"
 
-        print(f"♻️ Rebalancing: {direction} → {round(transfer_amount, 4)} USDT")
+        main_session.create_internal_transfer(
+            transfer_type=transfer_type,
+            coin="USDT",
+            amount=str(round(amount, 2)),
+            sub_member_id=SUB_UID
+        )
+
+        print("🔁 Rebalanced funds between main and sub accounts")
+    except Exception as e:
+        print("❌ Rebalance failed:", e)
+        
 
         # Make the transfer
         if direction == "MAIN_TO_SUB":
