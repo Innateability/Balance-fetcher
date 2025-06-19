@@ -120,4 +120,4 @@ async def receive_signal(request: Request):
 # === Health Check ===
 @app.get("/")
 def root():
-    return {"status": "Bot is online"
+    return {"status": "Bot is online"}
