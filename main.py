@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from pybit.unified_trading import HTTP
 import os
+import asyncio
 
 app = FastAPI()
 
@@ -15,6 +16,14 @@ SUB_UID = os.getenv("SUB_UID")
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
+# === Keep-alive to prevent Render shutdown ===
+@app.on_event("startup")
+async def keep_alive():
+    async def loop():
+        while True:
+            await asyncio.sleep(3600)
+    asyncio.create_task(loop())
+
 # === Get USDT balance ===
 def get_usdt_balance(session):
     try:
@@ -22,7 +31,8 @@ def get_usdt_balance(session):
         coins = data["result"]["list"][0]["coin"]
         usdt = next((c for c in coins if c["coin"] == "USDT"), None)
         return float(usdt["equity"]) if usdt else 0.0
-    except:
+    except Exception as e:
+        print("❌ Balance fetch failed:", e)
         return 0.0
 
 # === Rebalance Funds ===
@@ -46,7 +56,6 @@ def rebalance_funds():
             amount=str(round(amount, 2)),
             sub_member_id=SUB_UID
         )
-
         print("🔁 Rebalanced funds between main and sub accounts")
     except Exception as e:
         print("❌ Rebalance failed:", e)
@@ -91,7 +100,7 @@ async def receive_signal(request: Request):
         print("\n📩 Received Signal:\n", message)
 
         lines = message.splitlines()
-        if len(lines) < 3:
+        if len(lines) < 2:
             return {"error": "Invalid signal format"}
 
         symbol = lines[0].strip().upper()
