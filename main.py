@@ -12,7 +12,7 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 symbol = "TRXUSDT"
 side = "Buy"          # or "Sell"
 qty = 80             # contracts
-entry_price = 0.2778# the price at which you want to enter
+entry_price = 0.2778 # the price you want to enter at
 trigger_price = 0.278 # trigger price for conditional order
 
 # === Place conditional limit order ===
@@ -28,8 +28,7 @@ order = session.place_order(
     time_in_force="GoodTillCancel",
     reduce_only=False,
     close_on_trigger=False,
-    is_leverage=True,
-    position_idx=0  # 0 = default, 1 = long only, 2 = short only
+    position_idx=0  # 0 = default (both sides), 1 = long only, 2 = short only
 )
 
 print("✅ Order placed!")
