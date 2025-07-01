@@ -25,8 +25,8 @@ def place_conditional_buy(session):
         side = "Buy"
         order_type = "Limit"     # Order type after triggered
         qty = 19
-        trigger_price = 0.2789
-        price = 0.27895
+        trigger_price = 0.27855
+        price = 0.2786
         order_price_type = "Limit"
         position_idx = 1        # 1 = one-way mode, 2 = hedge
 
