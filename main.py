@@ -4,8 +4,8 @@ import os
 # ------------------------------
 # Setup your Bybit API keys
 # ------------------------------
-api_key = "Main_API_KEY"
-api_secret = "Main_API_SECRET"
+api_key = "MAIN_API_KEY"
+api_secret = "MAIN_API_SECRET"
 
 # ------------------------------
 # Create Bybit HTTP session
