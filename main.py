@@ -25,8 +25,8 @@ def place_conditional_buy(session):
         side = "Buy"
         order_type = "Limit"     # Order type after triggered
         qty = 19
-        trigger_price = 0.27855
-        price = 0.2786
+        trigger_price = 0.2789
+        price = 0.27895
         order_price_type = "Limit"
         position_idx = 1        # 1 = one-way mode, 2 = hedge
 
@@ -45,26 +45,32 @@ def place_conditional_buy(session):
             time_in_force="GoodTillCancel",
             position_idx=position_idx
         )
-        print("✅ Conditional buy order placed:", response)
         return response
 
     except Exception as e:
-        print("❌ Failed to place conditional buy order:", e)
+        print("❌ Exception while placing order:", e)
         return None
 
 @app.post("/conditional-buy")
 async def create_conditional_buy(request: Request):
     try:
-        # For this example, always using main_session
         res = place_conditional_buy(main_session)
+
+        # Debug print to see full response
+        if res:
+            print("🔎 Full API response:", res)
+
         if res and res["retCode"] == 0:
             return {"status": "✅ Conditional buy order created", "data": res["result"]}
         else:
-            return JSONResponse(content={"error": "Failed to create order"}, status_code=500)
+            # Show Bybit error message if available
+            return JSONResponse(content={"error": res["retMsg"] if res else "No response"}, status_code=500)
+
     except Exception as e:
+        print("❌ FastAPI route error:", e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/")
 def health():
     return {"status": "Bot is online ✅"}
-
+    
