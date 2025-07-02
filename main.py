@@ -27,7 +27,7 @@ def place_conditional_buy(session):
         qty = 19
         trigger_price = 0.2789
         price = 0.27895
-        order_price_type = "Limit"
+        trigger_by="LastPrice",
         position_idx = 1        # 1 = one-way mode, 2 = hedge
 
         response = session.place_order(
