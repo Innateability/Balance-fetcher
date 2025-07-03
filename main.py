@@ -10,10 +10,6 @@ MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
-SUB_UID = os.getenv("SUB_UID")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
@@ -23,26 +19,24 @@ def place_conditional_buy(session):
     try:
         symbol = "TRXUSDT"
         side = "Buy"
-        order_type = "Limit"     # Order type after triggered
         qty = 19
         trigger_price = 0.2789
         price = 0.27895
-        trigger_by="LastPrice",
-        position_idx = 1        # 1 = one-way mode, 2 = hedge
+        position_idx = 1  # 1 = default
 
         response = session.place_order(
             category="linear",
             symbol=symbol,
             side=side,
-            order_type=order_type,
+            order_type="Limit",
             qty=qty,
             price=price,
-            trigger_direction=1,  # 1 = trigger above market price, 2 = below
             trigger_price=trigger_price,
+            trigger_by="LastPrice",      # ✅ added
+            trigger_direction=1,         # 1 = above, 2 = below
+            time_in_force="GoodTillCancel",
             reduce_only=False,
             close_on_trigger=False,
-            order_price_type=order_price_type,
-            time_in_force="GoodTillCancel",
             position_idx=position_idx
         )
         return response
@@ -73,4 +67,3 @@ async def create_conditional_buy(request: Request):
 @app.get("/")
 def health():
     return {"status": "Bot is online ✅"}
-    
