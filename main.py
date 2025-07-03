@@ -18,7 +18,7 @@ sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 def place_conditional_buy(session):
     try:
         symbol = "TRXUSDT"
-        side = "Buy"
+        side = "Sell"
         order_type = "Limit"          # Order type after triggered
         qty = 19
         trigger_price = 0.2789
