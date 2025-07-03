@@ -13,11 +13,17 @@ MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
 # === Place Conditional Order ===
-def place_conditional_order(session, side="Buy", qty=19, price=0.27895, trigger_price=0.2789):
+def place_conditional_order(session, side="Sell", qty=18, price=0.287, trigger_price=0.2865):
     try:
         symbol = "TRXUSDT"
-        order_type = "Limit"  # After trigger, order will be limit
-        position_idx = 0      # 0 = default, 1 = long only, 2 = short only
+        order_type = "Limit"      # The type of order placed after trigger
+        position_idx = 0          # 0 = default (one-way), 1 = long only, 2 = short only
+
+        # Choose trigger_direction
+        if side == "Buy":
+            trigger_direction = 1  # Trigger when price rises to or above trigger_price
+        else:
+            trigger_direction = 2  # Trigger when price falls to or below trigger_price
 
         response = session.place_order(
             category="linear",
@@ -25,9 +31,10 @@ def place_conditional_order(session, side="Buy", qty=19, price=0.27895, trigger_
             side=side,
             order_type=order_type,
             qty=qty,
-            price=price,                # Limit price to place after trigger
+            price=price,
             trigger_price=trigger_price,
-            trigger_by="LastPrice",     # Trigger condition (can also use "MarkPrice")
+            trigger_direction=trigger_direction,
+            trigger_by="LastPrice",     # Could also use "MarkPrice"
             time_in_force="GoodTillCancel",
             reduce_only=False,
             close_on_trigger=False,
@@ -44,12 +51,18 @@ def place_conditional_order(session, side="Buy", qty=19, price=0.27895, trigger_
 async def create_conditional_order(request: Request):
     try:
         data = await request.json()
-        side = data.get("side", "Buy")
-        qty = data.get("qty", 19)
-        price = data.get("price", 0.27895)
-        trigger_price = data.get("trigger_price", 0.2789)
+        side = data.get("side", "Sell")
+        qty = data.get("qty", 18)
+        price = data.get("price", 0.287)
+        trigger_price = data.get("trigger_price", 0.2865)
 
-        res = place_conditional_order(main_session, side=side, qty=qty, price=price, trigger_price=trigger_price)
+        res = place_conditional_order(
+            main_session,
+            side=side,
+            qty=qty,
+            price=price,
+            trigger_price=trigger_price
+        )
 
         if res:
             print("🔎 Full API response:", res)
