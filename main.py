@@ -18,6 +18,7 @@ def place_conditional_buy(session):
     try:
         symbol = "TRXUSDT"
         side = "Buy"
+        order_type = "conditional"
         qty = 19
         trigger_price = 0.2789
         price = 0.27895
@@ -27,7 +28,7 @@ def place_conditional_buy(session):
             category="linear",
             symbol=symbol,
             side=side,
-            order_type="Limit",       # Limit order after triggered
+            order_type=order_type,       # Limit order after triggered
             qty=qty,
             price=price,
             trigger_price=trigger_price,
