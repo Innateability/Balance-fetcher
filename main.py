@@ -12,7 +12,6 @@ SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
-sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
 # === Place Conditional Buy Order ===
 def place_conditional_buy(session):
@@ -22,18 +21,17 @@ def place_conditional_buy(session):
         qty = 19
         trigger_price = 0.2789
         price = 0.27895
-        position_idx = 1  # 1 = default
+        position_idx = 1  # 1 = one-way mode (default)
 
         response = session.place_order(
             category="linear",
             symbol=symbol,
             side=side,
-            order_type="Limit",
+            order_type="Limit",       # Limit order after triggered
             qty=qty,
             price=price,
             trigger_price=trigger_price,
-            trigger_by="LastPrice",      # ✅ added
-            trigger_direction=1,         # 1 = above, 2 = below
+            trigger_by="LastPrice",
             time_in_force="GoodTillCancel",
             reduce_only=False,
             close_on_trigger=False,
@@ -50,14 +48,12 @@ async def create_conditional_buy(request: Request):
     try:
         res = place_conditional_buy(main_session)
 
-        # Debug print to see full response
         if res:
             print("🔎 Full API response:", res)
 
         if res and res["retCode"] == 0:
             return {"status": "✅ Conditional buy order created", "data": res["result"]}
         else:
-            # Show Bybit error message if available
             return JSONResponse(content={"error": res["retMsg"] if res else "No response"}, status_code=500)
 
     except Exception as e:
