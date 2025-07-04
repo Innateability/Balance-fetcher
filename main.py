@@ -1,5 +1,8 @@
+from fastapi import FastAPI
 from pybit.unified_trading import HTTP
 import os
+
+app = FastAPI()
 
 # === ENV VARIABLES ===
 MAIN_API_KEY = os.getenv("MAIN_API_KEY")
@@ -7,14 +10,12 @@ MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
-# === Your trade parameters ===
 symbol = "TRXUSDT"
-side = "Buy"  # or "Sell"
-entry = 0.27611
-tp = 0.2779730550000001
-sl = 0.27496
+side = "Buy"
+entry = 0.2859
+tp = 0.2861
+sl = 0.2857
 
-# === Cancel all open orders first ===
 def cancel_all_orders(session):
     try:
         session.cancel_all_orders(category="linear", symbol=symbol)
@@ -22,7 +23,6 @@ def cancel_all_orders(session):
     except Exception as e:
         print("⚠️ Cancel orders failed:", e)
 
-# === Get USDT balance ===
 def get_usdt_balance(session):
     try:
         data = session.get_wallet_balance(accountType="UNIFIED")
@@ -32,18 +32,16 @@ def get_usdt_balance(session):
     except:
         return 0
 
-# === Place order ===
 def place_main_order():
     try:
         session = main_session
 
         cancel_all_orders(session)
 
-        # Get current price
+        # Get price
         price = float(session.get_tickers(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
         immediate_market = (price > entry if side == "Buy" else price < entry)
 
-        # Calculate qty
         balance = get_usdt_balance(session)
         risk_amount = balance * 0.10
         sl_diff = abs(entry - sl)
@@ -54,7 +52,6 @@ def place_main_order():
 
         print(f"📢 Placing {side} market order at {entry}, qty={qty}")
 
-        # Entry order
         res = session.place_order(
             category="linear",
             symbol=symbol,
@@ -68,14 +65,12 @@ def place_main_order():
         )
         print("✅ Entry order placed:", res)
 
-        # Get tick size
         tick_size = float(session.get_instruments_info(category="linear", symbol=symbol)['result']['list'][0]['priceFilter']['tickSize'])
         round_price = lambda x: round(round(x / tick_size) * tick_size, 8)
 
         tp_price = round_price(tp)
         sl_price = round_price(sl)
 
-        # TP order
         session.place_order(
             category="linear",
             symbol=symbol,
@@ -90,7 +85,6 @@ def place_main_order():
         )
         print(f"✅ TP order placed at {tp_price}")
 
-        # SL order
         session.place_order(
             category="linear",
             symbol=symbol,
@@ -110,7 +104,11 @@ def place_main_order():
     except Exception as e:
         print("❌ Failed to place order:", e)
 
-# === Run immediately ===
-if __name__ == "__main__":
+@app.on_event("startup")
+async def startup_event():
     place_main_order()
+
+@app.get("/")
+def health():
+    return {"status": "Bot is online ✅"}
     
