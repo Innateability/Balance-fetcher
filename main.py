@@ -220,7 +220,7 @@ async def update_levels(request: Request):
         low = float(lines[2].split(":")[1].strip())
 
         if symbol != "TRXUSDT":
-            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400})
+            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
 
         last_levels["high"] = high
         last_levels["low"] = low
