@@ -5,36 +5,61 @@ import os
 MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 
-# === Create Bybit session ===
 session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
-# === Parameters ===
+# === YOUR SIGNAL (paste manually here) ===
 symbol = "TRXUSDT"
-side = "Buy"                # "Buy" or "Sell"
-entry_price = 0.2859     # Just for reference — market order executes at current price
-tp_price = 0.2861
-sl_price = 0.2857
-qty = 65                   # Example quantity
+side = "Buy"         # or "Sell"
+entry_price = 0.2862
+tp_price = 0.2864
+sl_price = 0.286
+qty = 65            # Your chosen quantity
 
-# === Place market order with TP and SL in one request ===
 try:
-    response = session.place_order(
+    # === Decide closing side ===
+    close_side = "Sell" if side == "Buy" else "Buy"
+
+    # === Market entry ===
+    entry_order = session.place_order(
         category="linear",
         symbol=symbol,
         side=side,
         order_type="Market",
         qty=qty,
-        take_profit=tp_price,
-        stop_loss=sl_price,
-        position_idx=0,
         time_in_force="ImmediateOrCancel",
         reduce_only=False,
-        close_on_trigger=False
+        position_idx=0
     )
+    print("✅ Market order placed:", entry_order)
 
-    print("✅ Market order placed with TP and SL!")
-    print(response)
+    # === TP order (limit, reduce-only) ===
+    tp_order = session.place_order(
+        category="linear",
+        symbol=symbol,
+        side=close_side,
+        order_type="Limit",
+        price=tp_price,
+        qty=qty,
+        reduce_only=True,
+        time_in_force="GoodTillCancel",
+        position_idx=0
+    )
+    print("✅ TP order placed at", tp_price)
+
+    # === SL order (limit, reduce-only) ===
+    sl_order = session.place_order(
+        category="linear",
+        symbol=symbol,
+        side=close_side,
+        order_type="Limit",
+        price=sl_price,
+        qty=qty,
+        reduce_only=True,
+        time_in_force="GoodTillCancel",
+        position_idx=0
+    )
+    print("✅ SL order placed at", sl_price)
 
 except Exception as e:
-    print("❌ Error placing order:", e)
-    
+    print("❌ Error:", str(e))
+
