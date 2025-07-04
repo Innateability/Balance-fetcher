@@ -14,7 +14,7 @@ side = "Buy"                # "Buy" or "Sell"
 entry_price = 0.2859     # Just for reference — market order executes at current price
 tp_price = 0.2861
 sl_price = 0.2857
-qty = 72                   # Example quantity
+qty = 65                   # Example quantity
 
 # === Place market order with TP and SL in one request ===
 try:
