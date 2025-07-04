@@ -7,19 +7,28 @@ MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 
 session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
-# === YOUR SIGNAL (paste manually here) ===
+# === YOUR SIGNAL ===
 symbol = "TRXUSDT"
 side = "Buy"         # or "Sell"
-entry_price = 0.2862
-tp_price = 0.2864
-sl_price = 0.286
-qty = 65            # Your chosen quantity
+entry_price = 0.2859
+tp_price = 0.287
+sl_price = 0.284
+qty = 57
 
 try:
-    # === Decide closing side ===
+    # Get tick size
+    instruments_info = session.get_instruments_info(category="linear", symbol=symbol)
+    tick_size = float(instruments_info["result"]["list"][0]["priceFilter"]["tickSize"])
+    round_price = lambda x: round(round(x / tick_size) * tick_size, 8)
+
+    # Round TP & SL prices
+    tp_price_rounded = round_price(tp_price)
+    sl_price_rounded = round_price(sl_price)
+
+    # Decide closing side
     close_side = "Sell" if side == "Buy" else "Buy"
 
-    # === Market entry ===
+    # Market entry
     entry_order = session.place_order(
         category="linear",
         symbol=symbol,
@@ -32,33 +41,39 @@ try:
     )
     print("✅ Market order placed:", entry_order)
 
-    # === TP order (limit, reduce-only) ===
+    # TP order
     tp_order = session.place_order(
         category="linear",
         symbol=symbol,
         side=close_side,
         order_type="Limit",
-        price=tp_price,
+        price=tp_price_rounded,
         qty=qty,
         reduce_only=True,
         time_in_force="GoodTillCancel",
         position_idx=0
     )
-    print("✅ TP order placed at", tp_price)
+    if tp_order["retCode"] == 0:
+        print(f"✅ TP order placed at {tp_price_rounded}")
+    else:
+        print("❌ TP order error:", tp_order["retMsg"])
 
-    # === SL order (limit, reduce-only) ===
+    # SL order
     sl_order = session.place_order(
         category="linear",
         symbol=symbol,
         side=close_side,
         order_type="Limit",
-        price=sl_price,
+        price=sl_price_rounded,
         qty=qty,
         reduce_only=True,
         time_in_force="GoodTillCancel",
         position_idx=0
     )
-    print("✅ SL order placed at", sl_price)
+    if sl_order["retCode"] == 0:
+        print(f"✅ SL order placed at {sl_price_rounded}")
+    else:
+        print("❌ SL order error:", sl_order["retMsg"])
 
 except Exception as e:
     print("❌ Error:", str(e))
