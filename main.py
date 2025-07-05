@@ -22,14 +22,12 @@ SUB_UID = os.getenv("SUB_UID")
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
-# === Shared state ===
 signals = {
     "buy": {"entry": None, "high": None, "low": None, "active": False},
     "sell": {"entry": None, "high": None, "low": None, "active": False}
 }
 monitor_tasks = {}
 
-# === Helper: Get USDT balance ===
 def get_usdt_balance(session):
     try:
         data = session.get_wallet_balance(accountType="UNIFIED")
@@ -39,7 +37,6 @@ def get_usdt_balance(session):
     except:
         return 0
 
-# === Helper: Rebalance funds between main and sub ===
 def rebalance_funds():
     try:
         main = get_usdt_balance(main_session)
@@ -61,7 +58,6 @@ def rebalance_funds():
     except Exception as e:
         print("❌ Rebalance failed:", e)
 
-# === Helper: Close all positions in session ===
 def close_positions(session, label):
     try:
         pos = session.get_positions(category="linear", symbol="TRXUSDT")["result"]["list"]
@@ -83,7 +79,6 @@ def close_positions(session, label):
     except Exception as e:
         print(f"❌ {label} close failed:", e)
 
-# === Helper: Cancel all open orders ===
 def cancel_all_orders(session):
     try:
         session.cancel_all_orders(category="linear", symbol="TRXUSDT")
@@ -91,13 +86,11 @@ def cancel_all_orders(session):
     except Exception as e:
         print("⚠️ Failed to cancel orders:", e)
 
-# === Helper: Get current TRXUSDT price ===
 def get_current_price():
     data = main_session.get_tickers(category="linear", symbol="TRXUSDT")
     price = float(data["result"]["list"][0]["lastPrice"])
     return price
 
-# === Monitor entry & TP/SL ===
 async def monitor_price(signal_type):
     global signals
 
@@ -114,21 +107,26 @@ async def monitor_price(signal_type):
 
     print(f"👀 Monitoring price for {signal_type.upper()} at {entry}...")
 
+    log_counter = 0
+
     while True:
         await asyncio.sleep(5)
         price = get_current_price()
-        print(f"Current price: {price}")
+
+        # Print price to logs every 12 * 5sec = 60sec
+        log_counter += 1
+        if log_counter >= 12:
+            print(f"📊 Current price: {price}")
+            log_counter = 0
 
         if (signal_type == "buy" and price >= entry) or (signal_type == "sell" and price <= entry):
             print(f"🚀 Entry price hit for {signal_type.upper()} at {price}")
 
-            # Calculate SL & TP
             sl = low if signal_type == "buy" else high
             rr = abs(entry - sl)
-            extra = entry * 0.007  # 0.7% of entry price
+            extra = entry * 0.007
             tp = entry + 1.5 * rr + extra if signal_type == "buy" else entry - 1.5 * rr - extra
 
-            # Calculate qty
             balance = get_usdt_balance(session)
             total = get_usdt_balance(main_session) + get_usdt_balance(sub_session)
             risk = total * 0.10
@@ -141,7 +139,6 @@ async def monitor_price(signal_type):
             cancel_all_orders(session)
             close_positions(session, label)
 
-            # Place market order
             res = session.place_order(
                 category="linear",
                 symbol="TRXUSDT",
@@ -153,10 +150,15 @@ async def monitor_price(signal_type):
             )
             print(f"✅ Market {signal_type.upper()} order placed: {res}")
 
-            # Monitor for TP/SL
             while True:
                 await asyncio.sleep(5)
                 current = get_current_price()
+
+                log_counter += 1
+                if log_counter >= 12:
+                    print(f"📊 Current price: {current}")
+                    log_counter = 0
+
                 if (signal_type == "buy" and (current >= tp or current <= sl)):
                     print(f"🎯 TP or SL hit for {signal_type.upper()} at {current}")
                     close_positions(session, label)
@@ -175,7 +177,6 @@ async def monitor_price(signal_type):
             print(f"✅ Trade closed for {signal_type.upper()}, ready for new signals.")
             break
 
-# === Receive signals ===
 @app.post("/signal")
 async def receive_signal(request: Request):
     try:
@@ -189,41 +190,42 @@ async def receive_signal(request: Request):
         if symbol != "TRXUSDT":
             return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
 
-        line2 = lines[1].lower()
-        if "type" in line2:
-            signal_type = line2.split(":")[1].strip().lower()
+        signal_type = None
+        entry = None
+        high = None
+        low = None
+
+        for line in lines:
+            if "type" in line.lower():
+                signal_type = line.split(":")[1].strip().lower()
+            elif "entry" in line.lower():
+                entry = float(line.split(":")[1].strip())
+            elif "high" in line.lower():
+                high = float(line.split(":")[1].strip())
+            elif "low" in line.lower():
+                low = float(line.split(":")[1].strip())
+
+        if entry and signal_type:
             if signal_type not in ["buy", "sell"]:
                 return JSONResponse(content={"error": "Invalid type"}, status_code=400)
+            if not signals[signal_type]["active"]:
+                signals[signal_type]["entry"] = entry
+                print(f"✅ Stored new entry for {signal_type.upper()}: {entry}")
 
-            entry_line = next((l for l in lines if "entry" in l.lower()), None)
-            if entry_line:
-                entry = float(entry_line.split(":")[1].strip())
-                if not signals[signal_type]["active"]:
-                    signals[signal_type]["entry"] = entry
-                    print(f"✅ Stored new entry for {signal_type.upper()}: {entry}")
+                if signal_type not in monitor_tasks or monitor_tasks[signal_type].done():
+                    monitor_tasks[signal_type] = asyncio.create_task(monitor_price(signal_type))
 
-                    if signal_type not in monitor_tasks or monitor_tasks[signal_type].done():
-                        monitor_tasks[signal_type] = asyncio.create_task(monitor_price(signal_type))
+                return {"status": f"New entry stored for {signal_type.upper()}"}
+            else:
+                return {"status": f"Trade already active for {signal_type.upper()}, ignoring entry signal"}
 
-                    return {"status": f"New entry stored for {signal_type.upper()}"}
-                else:
-                    return {"status": f"Trade already active for {signal_type.upper()}, ignoring entry signal"}
-
-        elif "high" in line2 or "low" in line2:
-            high = low = None
-            for line in lines:
-                if "high" in line.lower():
-                    high = float(line.split(":")[1].strip())
-                if "low" in line.lower():
-                    low = float(line.split(":")[1].strip())
-
-            if high and low:
-                for t in ["buy", "sell"]:
-                    if not signals[t]["active"]:
-                        signals[t]["high"] = high
-                        signals[t]["low"] = low
-                        print(f"✅ Stored new high/low for {t.upper()}: High={high}, Low={low}")
-                return {"status": f"New high/low stored for non-active signals"}
+        elif high and low:
+            for t in ["buy", "sell"]:
+                if not signals[t]["active"]:
+                    signals[t]["high"] = high
+                    signals[t]["low"] = low
+                    print(f"✅ Stored new high/low for {t.upper()}: High={high}, Low={low}")
+            return {"status": f"New high/low stored for non-active signals"}
 
         return JSONResponse(content={"error": "No valid entry or high/low found"}, status_code=400)
 
