@@ -22,14 +22,14 @@ SUB_UID = os.getenv("SUB_UID")
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
-# === Global state ===
-last_levels = {"buy": {"high": None, "low": None}, "sell": {"high": None, "low": None}}
-entry_prices = {"buy": None, "sell": None}
-positions_active = {"buy": False, "sell": False}
-tp_sl_levels = {"buy": {"tp": None, "sl": None}, "sell": {"tp": None, "sl": None}}
-trade_log = []
+# === Shared state ===
+signals = {
+    "buy": {"entry": None, "high": None, "low": None, "active": False},
+    "sell": {"entry": None, "high": None, "low": None, "active": False}
+}
+monitor_tasks = {}
 
-# === Balance helpers ===
+# === Helper: Get USDT balance ===
 def get_usdt_balance(session):
     try:
         data = session.get_wallet_balance(accountType="UNIFIED")
@@ -39,6 +39,7 @@ def get_usdt_balance(session):
     except:
         return 0
 
+# === Helper: Rebalance funds between main and sub ===
 def rebalance_funds():
     try:
         main = get_usdt_balance(main_session)
@@ -60,7 +61,8 @@ def rebalance_funds():
     except Exception as e:
         print("❌ Rebalance failed:", e)
 
-def close_trades(session, label):
+# === Helper: Close all positions in session ===
+def close_positions(session, label):
     try:
         pos = session.get_positions(category="linear", symbol="TRXUSDT")["result"]["list"]
         for p in pos:
@@ -77,138 +79,54 @@ def close_trades(session, label):
                     reduce_only=True,
                     position_idx=0
                 )
-                print(f"✅ {label} Account: Closed {side} {size}")
-        return True
+                print(f"✅ {label}: Closed {side} position with {size} contracts")
     except Exception as e:
         print(f"❌ {label} close failed:", e)
-        return False
 
-# === Email summary ===
-def send_email(subject, body):
+# === Helper: Cancel all open orders ===
+def cancel_all_orders(session):
     try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        print("📧 Email sent")
+        session.cancel_all_orders(category="linear", symbol="TRXUSDT")
+        print("❌ All open orders cancelled for TRXUSDT")
     except Exception as e:
-        print("❌ Email failed:", e)
+        print("⚠️ Failed to cancel orders:", e)
 
-def summarize_trades():
-    if not trade_log:
-        return None
-    wins = sum(1 for t in trade_log if t["outcome"] == "win")
-    losses = sum(1 for t in trade_log if t["outcome"] == "loss")
-    return f"WINS: {wins}\nLOSSES: {losses}"
+# === Helper: Get current TRXUSDT price ===
+def get_current_price():
+    data = main_session.get_tickers(category="linear", symbol="TRXUSDT")
+    price = float(data["result"]["list"][0]["lastPrice"])
+    return price
 
-@app.on_event("startup")
-async def startup():
-    async def summary_loop():
-        while True:
-            now = datetime.utcnow()
-            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-            await asyncio.sleep((midnight - now).total_seconds())
-            summary = summarize_trades()
-            if summary:
-                send_email("Daily Trade Summary", summary)
-                trade_log.clear()
-    asyncio.create_task(summary_loop())
+# === Monitor entry & TP/SL ===
+async def monitor_price(signal_type):
+    global signals
 
-    async def monitor_loop():
-        while True:
-            await monitor_price("buy")
-            await monitor_price("sell")
-            await asyncio.sleep(5)
+    session = sub_session if signal_type == "buy" else main_session
+    label = "Sub" if signal_type == "buy" else "Main"
 
-    asyncio.create_task(monitor_loop())
+    entry = signals[signal_type]["entry"]
+    high = signals[signal_type]["high"]
+    low = signals[signal_type]["low"]
 
-@app.post("/signal")
-async def receive_signal(request: Request):
-    try:
-        body = (await request.body()).decode().strip()
-        print("\n📩 Signal:\n", body)
-        lines = [l.strip() for l in body.splitlines() if l.strip()]
-        if len(lines) < 3:
-            return JSONResponse(content={"error": "Bad format"}, status_code=400)
-
-        symbol = lines[0].upper()
-        signal_type = lines[1].split(":")[1].strip().lower()
-        entry = float(lines[2].split(":")[1].strip())
-
-        if symbol != "TRXUSDT":
-            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
-
-        side = "buy" if signal_type == "buy" else "sell"
-
-        # Only store new entry if no active position
-        if not positions_active[side]:
-            entry_prices[side] = entry
-            print(f"✅ Stored new {side} entry price: {entry}")
-            return {"status": f"{side.capitalize()} entry price stored"}
-
-        return {"status": f"{side.capitalize()} trade already active; ignoring new entry"}
-
-    except Exception as e:
-        print("❌ Error:", str(e))
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-@app.post("/highlow")
-async def receive_highlow(request: Request):
-    try:
-        body = (await request.body()).decode().strip()
-        print("\n📩 High/Low Signal:\n", body)
-        lines = [l.strip() for l in body.splitlines() if l.strip()]
-        if len(lines) < 3:
-            return JSONResponse(content={"error": "Bad format"}, status_code=400)
-
-        symbol = lines[0].upper()
-        signal_type = lines[1].split(":")[1].strip().lower()
-        high = float(lines[2].split(":")[1].strip())
-        low = float(lines[3].split(":")[1].strip())
-
-        if symbol != "TRXUSDT":
-            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
-
-        side = "buy" if signal_type == "buy" else "sell"
-
-        # Only update if no active position
-        if not positions_active[side]:
-            last_levels[side]["high"] = high
-            last_levels[side]["low"] = low
-            print(f"✅ Updated {side} high/low: High={high}, Low={low}")
-            return {"status": f"{side.capitalize()} high/low updated"}
-
-        return {"status": f"{side.capitalize()} trade active; ignoring new high/low"}
-
-    except Exception as e:
-        print("❌ Error:", str(e))
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-async def monitor_price(side):
-    if positions_active[side] or entry_prices[side] is None or last_levels[side]["low"] is None or last_levels[side]["high"] is None:
+    if not entry or not high or not low:
+        print(f"⚠️ Missing entry or high/low for {signal_type.upper()}")
         return
 
-    session = sub_session if side == "buy" else main_session
-    label = "Sub" if side == "buy" else "Main"
+    print(f"👀 Monitoring price for {signal_type.upper()} at {entry}...")
 
-    try:
-        price_data = session.get_tickers(category="linear", symbol="TRXUSDT")
-        price = float(price_data["result"]["list"][0]["lastPrice"])
+    while True:
+        await asyncio.sleep(5)
+        price = get_current_price()
+        print(f"Current price: {price}")
 
-        entry = entry_prices[side]
-        high = last_levels[side]["high"]
-        low = last_levels[side]["low"]
+        if (signal_type == "buy" and price >= entry) or (signal_type == "sell" and price <= entry):
+            print(f"🚀 Entry price hit for {signal_type.upper()} at {price}")
 
-        if (side == "buy" and price >= entry) or (side == "sell" and price <= entry):
-            print(f"🚀 Entry price hit for {side.upper()} at {price}")
-
-            # Calculate SL and TP
-            sl = low if side == "buy" else high
+            # Calculate SL & TP
+            sl = low if signal_type == "buy" else high
             rr = abs(entry - sl)
-            tp = entry + 1.5 * rr + (0.007 * entry) if side == "buy" else entry - 1.5 * rr - (0.007 * entry)
+            extra = entry * 0.007  # 0.7% of entry price
+            tp = entry + 1.5 * rr + extra if signal_type == "buy" else entry - 1.5 * rr - extra
 
             # Calculate qty
             balance = get_usdt_balance(session)
@@ -220,41 +138,98 @@ async def monitor_price(side):
             max_qty = ((balance * leverage) / entry) * 0.9
             qty = max(1, round(min(qty_risk, max_qty)))
 
-            if qty * entry < 5:
-                print("❌ Order value below 5 USDT minimum. Skipping trade.")
-                return
+            cancel_all_orders(session)
+            close_positions(session, label)
 
             # Place market order
-            session.place_order(
+            res = session.place_order(
                 category="linear",
                 symbol="TRXUSDT",
-                side="Buy" if side == "buy" else "Sell",
+                side="Buy" if signal_type == "buy" else "Sell",
                 order_type="Market",
                 qty=qty,
                 reduce_only=False,
                 position_idx=0
             )
+            print(f"✅ Market {signal_type.upper()} order placed: {res}")
 
-            tp_sl_levels[side]["tp"] = tp
-            tp_sl_levels[side]["sl"] = sl
-            positions_active[side] = True
+            # Monitor for TP/SL
+            while True:
+                await asyncio.sleep(5)
+                current = get_current_price()
+                if (signal_type == "buy" and (current >= tp or current <= sl)):
+                    print(f"🎯 TP or SL hit for {signal_type.upper()} at {current}")
+                    close_positions(session, label)
+                    rebalance_funds()
+                    break
+                elif (signal_type == "sell" and (current <= tp or current >= sl)):
+                    print(f"🎯 TP or SL hit for {signal_type.upper()} at {current}")
+                    close_positions(session, label)
+                    rebalance_funds()
+                    break
 
-            print(f"✅ {side.capitalize()} position opened. TP: {tp}, SL: {sl}")
+            signals[signal_type]["active"] = False
+            signals[signal_type]["entry"] = None
+            signals[signal_type]["high"] = None
+            signals[signal_type]["low"] = None
+            print(f"✅ Trade closed for {signal_type.upper()}, ready for new signals.")
+            break
 
-        # If trade active, monitor for TP or SL
-        if positions_active[side]:
-            if (side == "buy" and (price >= tp_sl_levels[side]["tp"] or price <= tp_sl_levels[side]["sl"])) or \
-               (side == "sell" and (price <= tp_sl_levels[side]["tp"] or price >= tp_sl_levels[side]["sl"])):
+# === Receive signals ===
+@app.post("/signal")
+async def receive_signal(request: Request):
+    try:
+        body = (await request.body()).decode().strip()
+        print("\n📩 Signal received:\n", body)
+        lines = [l.strip() for l in body.splitlines() if l.strip()]
+        if len(lines) < 2:
+            return JSONResponse(content={"error": "Bad format"}, status_code=400)
 
-                close_trades(session, label)
-                positions_active[side] = False
-                entry_prices[side] = None
-                tp_sl_levels[side] = {"tp": None, "sl": None}
-                rebalance_funds()
-                print(f"✅ {side.capitalize()} position closed by TP or SL.")
+        symbol = lines[0].upper()
+        if symbol != "TRXUSDT":
+            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
+
+        line2 = lines[1].lower()
+        if "type" in line2:
+            signal_type = line2.split(":")[1].strip().lower()
+            if signal_type not in ["buy", "sell"]:
+                return JSONResponse(content={"error": "Invalid type"}, status_code=400)
+
+            entry_line = next((l for l in lines if "entry" in l.lower()), None)
+            if entry_line:
+                entry = float(entry_line.split(":")[1].strip())
+                if not signals[signal_type]["active"]:
+                    signals[signal_type]["entry"] = entry
+                    print(f"✅ Stored new entry for {signal_type.upper()}: {entry}")
+
+                    if signal_type not in monitor_tasks or monitor_tasks[signal_type].done():
+                        monitor_tasks[signal_type] = asyncio.create_task(monitor_price(signal_type))
+
+                    return {"status": f"New entry stored for {signal_type.upper()}"}
+                else:
+                    return {"status": f"Trade already active for {signal_type.upper()}, ignoring entry signal"}
+
+        elif "high" in line2 or "low" in line2:
+            high = low = None
+            for line in lines:
+                if "high" in line.lower():
+                    high = float(line.split(":")[1].strip())
+                if "low" in line.lower():
+                    low = float(line.split(":")[1].strip())
+
+            if high and low:
+                for t in ["buy", "sell"]:
+                    if not signals[t]["active"]:
+                        signals[t]["high"] = high
+                        signals[t]["low"] = low
+                        print(f"✅ Stored new high/low for {t.upper()}: High={high}, Low={low}")
+                return {"status": f"New high/low stored for non-active signals"}
+
+        return JSONResponse(content={"error": "No valid entry or high/low found"}, status_code=400)
 
     except Exception as e:
-        print(f"❌ Monitor error ({side}):", e)
+        print("❌ Error:", str(e))
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/")
 def health():
