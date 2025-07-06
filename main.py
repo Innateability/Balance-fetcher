@@ -30,17 +30,13 @@ in_red_series, in_green_series = False, False
 
 # === Get Heikin Ashi candle (Bybit linear) ===
 def get_heikin_ashi_candle(timeframe="60"):
-    data = main_session.get_kline(
-        category="linear", symbol="TRXUSDT", interval=timeframe, limit=2
-    )["result"]["list"]
+    data = main_session.get_kline(category="linear", symbol="TRXUSDT", interval=timeframe, limit=2)["result"]["list"]
 
-    # Most recent closed candle
     k = data[-2]
     open_, high, low, close = map(float, k[1:5])
 
-    # Heikin Ashi calculation
     ha_close = (open_ + high + low + close) / 4
-    ha_open = (open_ + close) / 2  # approximate start
+    ha_open = (open_ + close) / 2
     ha_high = max(high, ha_open, ha_close)
     ha_low = min(low, ha_open, ha_close)
 
@@ -48,16 +44,13 @@ def get_heikin_ashi_candle(timeframe="60"):
 
 # === Get 5-min high/low candle ===
 def get_5m_high_low():
-    data = main_session.get_kline(
-        category="linear", symbol="TRXUSDT", interval="5", limit=2
-    )["result"]["list"]
+    data = main_session.get_kline(category="linear", symbol="TRXUSDT", interval="5", limit=2)["result"]["list"]
 
     k = data[-2]
     high = float(k[3])
     low = float(k[4])
     return high, low
 
-# === Rebalance funds between main & sub ===
 def rebalance_funds():
     try:
         main = get_usdt_balance(main_session)
@@ -153,10 +146,7 @@ async def monitor(signal_type):
     while True:
         await asyncio.sleep(5)
         price = get_current_price()
-
-        now = datetime.utcnow()
-        if now.second == 0 and now.minute % 1 == 0:
-            print(f"📊 Current price: {price}")
+        print(f"📊 Current price: {price}")
 
         if (signal_type == "buy" and price >= entry) or (signal_type == "sell" and price <= entry):
             print(f"🚀 Entry price hit for {signal_type.upper()} at {price}")
@@ -197,8 +187,8 @@ async def periodic_tasks():
     while True:
         now = datetime.utcnow()
 
-        # Check hourly (1-hour candle series logic)
-        if now.minute == 0 and now.second < 10:
+        # Check hourly (1-hour candle logic)
+        if now.minute == 0:
             ha_open, ha_high, ha_low, ha_close = get_heikin_ashi_candle("60")
             is_green = ha_close > ha_open
             is_red = ha_close < ha_open
@@ -237,11 +227,12 @@ async def periodic_tasks():
                 print(f"✅ New SELL signal stored at {signals['sell']['entry']}")
 
         # Every 5 mins: update high/low
-        if now.minute % 5 == 0 and now.second < 10:
+        if now.minute % 5 == 0:
             high, low = get_5m_high_low()
             high_low["high"] = high
             high_low["low"] = low
             print(f"📊 Updated 5-min high/low: High={high}, Low={low}")
+            await asyncio.sleep(60)  # Avoid multiple logs within same 5-min window
 
         await asyncio.sleep(10)
 
@@ -252,11 +243,12 @@ async def startup_event():
 @app.get("/")
 def health():
     return {"status": "Bot is online ✅"}
+
 @app.on_event("startup")
 async def heartbeat():
     async def print_heartbeat():
         while True:
-            await asyncio.sleep(300)  # 5 minutes = 300 seconds
+            await asyncio.sleep(300)
             print("✅ Bot is running")
-    asyncio.create_task(print_heartbeat())
+    asyncio.create_task(print_heartbeat()
     
