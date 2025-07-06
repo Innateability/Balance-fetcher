@@ -252,4 +252,11 @@ async def startup_event():
 @app.get("/")
 def health():
     return {"status": "Bot is online ✅"}
+@app.on_event("startup")
+async def heartbeat():
+    async def print_heartbeat():
+        while True:
+            await asyncio.sleep(300)  # 5 minutes = 300 seconds
+            print("✅ Bot is running")
+    asyncio.create_task(print_heartbeat())
     
