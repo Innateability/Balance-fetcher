@@ -250,5 +250,5 @@ async def heartbeat():
         while True:
             await asyncio.sleep(300)
             print("✅ Bot is running")
-    asyncio.create_task(print_heartbeat()
+    asyncio.create_task(print_heartbeat())
     
