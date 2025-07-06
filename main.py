@@ -1,42 +1,63 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from pybit.unified_trading import HTTP
-import os
-import smtplib
-from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from fastapi import FastAPI
 import asyncio
+import os
+from pybit.unified_trading import HTTP
+from datetime import datetime
 
 app = FastAPI()
 
-# === ENV VARIABLES ===
+# === Bybit sessions ===
 MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 SUB_UID = os.getenv("SUB_UID")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
 
+# === Shared state ===
 signals = {
-    "buy": {"entry": None, "high": None, "low": None, "active": False},
-    "sell": {"entry": None, "high": None, "low": None, "active": False}
+    "buy": {"entry": None, "active": False},
+    "sell": {"entry": None, "active": False},
 }
-monitor_tasks = {}
+high_low = {"high": None, "low": None}
 
-def get_usdt_balance(session):
-    try:
-        data = session.get_wallet_balance(accountType="UNIFIED")
-        coins = data["result"]["list"][0]["coin"]
-        usdt = next((x for x in coins if x["coin"] == "USDT"), None)
-        return float(usdt["equity"]) if usdt else 0
-    except:
-        return 0
+# === Variables for 1-hour series logic ===
+last_red_low, prev_red_low = None, None
+last_green_high, prev_green_high = None, None
+in_red_series, in_green_series = False, False
 
+# === Get Heikin Ashi candle (Bybit linear) ===
+def get_heikin_ashi_candle(timeframe="60"):
+    data = main_session.get_kline(
+        category="linear", symbol="TRXUSDT", interval=timeframe, limit=2
+    )["result"]["list"]
+
+    # Most recent closed candle
+    k = data[-2]
+    open_, high, low, close = map(float, k[1:5])
+
+    # Heikin Ashi calculation
+    ha_close = (open_ + high + low + close) / 4
+    ha_open = (open_ + close) / 2  # approximate start
+    ha_high = max(high, ha_open, ha_close)
+    ha_low = min(low, ha_open, ha_close)
+
+    return ha_open, ha_high, ha_low, ha_close
+
+# === Get 5-min high/low candle ===
+def get_5m_high_low():
+    data = main_session.get_kline(
+        category="linear", symbol="TRXUSDT", interval="5", limit=2
+    )["result"]["list"]
+
+    k = data[-2]
+    high = float(k[3])
+    low = float(k[4])
+    return high, low
+
+# === Rebalance funds between main & sub ===
 def rebalance_funds():
     try:
         main = get_usdt_balance(main_session)
@@ -57,6 +78,22 @@ def rebalance_funds():
         print("🔁 Rebalanced main/sub")
     except Exception as e:
         print("❌ Rebalance failed:", e)
+
+def get_usdt_balance(session):
+    try:
+        data = session.get_wallet_balance(accountType="UNIFIED")
+        coins = data["result"]["list"][0]["coin"]
+        usdt = next((x for x in coins if x["coin"] == "USDT"), None)
+        return float(usdt["equity"]) if usdt else 0
+    except:
+        return 0
+
+def cancel_all_orders(session):
+    try:
+        session.cancel_all_orders(category="linear", symbol="TRXUSDT")
+        print("❌ All open orders cancelled for TRXUSDT")
+    except Exception as e:
+        print("⚠️ Failed to cancel orders:", e)
 
 def close_positions(session, label):
     try:
@@ -79,67 +116,55 @@ def close_positions(session, label):
     except Exception as e:
         print(f"❌ {label} close failed:", e)
 
-def cancel_all_orders(session):
-    try:
-        session.cancel_all_orders(category="linear", symbol="TRXUSDT")
-        print("❌ All open orders cancelled for TRXUSDT")
-    except Exception as e:
-        print("⚠️ Failed to cancel orders:", e)
-
 def get_current_price():
     data = main_session.get_tickers(category="linear", symbol="TRXUSDT")
     price = float(data["result"]["list"][0]["lastPrice"])
     return price
 
-async def monitor_price(signal_type):
-    global signals
-
+# === Monitor task ===
+async def monitor(signal_type):
     session = sub_session if signal_type == "buy" else main_session
     label = "Sub" if signal_type == "buy" else "Main"
 
     entry = signals[signal_type]["entry"]
-    high = signals[signal_type]["high"]
-    low = signals[signal_type]["low"]
+    high = high_low["high"]
+    low = high_low["low"]
 
     if not entry or not high or not low:
         print(f"⚠️ Missing entry or high/low for {signal_type.upper()}")
         return
 
-    print(f"👀 Monitoring price for {signal_type.upper()} at {entry}...")
+    sl = low if signal_type == "buy" else high
+    rr = abs(entry - sl)
+    extra = entry * 0.007
+    tp = entry + 1.5 * rr + extra if signal_type == "buy" else entry - 1.5 * rr - extra
 
-    log_counter = 0
+    balance = get_usdt_balance(session)
+    total = get_usdt_balance(main_session) + get_usdt_balance(sub_session)
+    risk = total * 0.10
+    sl_diff = abs(entry - sl)
+    leverage = 75
+    qty_risk = risk / sl_diff
+    max_qty = ((balance * leverage) / entry) * 0.9
+    qty = max(1, round(min(qty_risk, max_qty)))
+
+    print(f"👀 Monitoring for {signal_type.upper()} entry at {entry}...")
 
     while True:
         await asyncio.sleep(5)
         price = get_current_price()
 
-        # Print price to logs every 12 * 5sec = 60sec
-        log_counter += 1
-        if log_counter >= 12:
+        now = datetime.utcnow()
+        if now.second == 0 and now.minute % 1 == 0:
             print(f"📊 Current price: {price}")
-            log_counter = 0
 
         if (signal_type == "buy" and price >= entry) or (signal_type == "sell" and price <= entry):
             print(f"🚀 Entry price hit for {signal_type.upper()} at {price}")
 
-            sl = low if signal_type == "buy" else high
-            rr = abs(entry - sl)
-            extra = entry * 0.007
-            tp = entry + 1.5 * rr + extra if signal_type == "buy" else entry - 1.5 * rr - extra
-
-            balance = get_usdt_balance(session)
-            total = get_usdt_balance(main_session) + get_usdt_balance(sub_session)
-            risk = total * 0.10
-            sl_diff = abs(entry - sl)
-            leverage = 75
-            qty_risk = risk / sl_diff
-            max_qty = ((balance * leverage) / entry) * 0.9
-            qty = max(1, round(min(qty_risk, max_qty)))
-
             cancel_all_orders(session)
             close_positions(session, label)
 
-            res = session.place_order(
+            session.place_order(
                 category="linear",
                 symbol="TRXUSDT",
                 side="Buy" if signal_type == "buy" else "Sell",
@@ -148,90 +173,81 @@ async def monitor_price(signal_type):
                 reduce_only=False,
                 position_idx=0
             )
-            print(f"✅ Market {signal_type.upper()} order placed: {res}")
 
             while True:
                 await asyncio.sleep(5)
                 current = get_current_price()
-
-                log_counter += 1
-                if log_counter >= 12:
-                    print(f"📊 Current price: {current}")
-                    log_counter = 0
-
-                if (signal_type == "buy" and (current >= tp or current <= sl)):
-                    print(f"🎯 TP or SL hit for {signal_type.upper()} at {current}")
-                    close_positions(session, label)
-                    rebalance_funds()
-                    break
-                elif (signal_type == "sell" and (current <= tp or current >= sl)):
+                if (signal_type == "buy" and (current >= tp or current <= sl)) or \
+                   (signal_type == "sell" and (current <= tp or current >= sl)):
                     print(f"🎯 TP or SL hit for {signal_type.upper()} at {current}")
                     close_positions(session, label)
                     rebalance_funds()
                     break
 
-            signals[signal_type]["active"] = False
             signals[signal_type]["entry"] = None
-            signals[signal_type]["high"] = None
-            signals[signal_type]["low"] = None
+            signals[signal_type]["active"] = False
             print(f"✅ Trade closed for {signal_type.upper()}, ready for new signals.")
             break
 
-@app.post("/signal")
-async def receive_signal(request: Request):
-    try:
-        body = (await request.body()).decode().strip()
-        print("\n📩 Signal received:\n", body)
-        lines = [l.strip() for l in body.splitlines() if l.strip()]
-        if len(lines) < 2:
-            return JSONResponse(content={"error": "Bad format"}, status_code=400)
+# === Periodic tasks ===
+async def periodic_tasks():
+    global last_red_low, prev_red_low, last_green_high, prev_green_high
+    global in_red_series, in_green_series
 
-        symbol = lines[0].upper()
-        if symbol != "TRXUSDT":
-            return JSONResponse(content={"error": "Unsupported symbol"}, status_code=400)
+    while True:
+        now = datetime.utcnow()
 
-        signal_type = None
-        entry = None
-        high = None
-        low = None
+        # Check hourly (1-hour candle series logic)
+        if now.minute == 0 and now.second < 10:
+            ha_open, ha_high, ha_low, ha_close = get_heikin_ashi_candle("60")
+            is_green = ha_close > ha_open
+            is_red = ha_close < ha_open
 
-        for line in lines:
-            if "type" in line.lower():
-                signal_type = line.split(":")[1].strip().lower()
-            elif "entry" in line.lower():
-                entry = float(line.split(":")[1].strip())
-            elif "high" in line.lower():
-                high = float(line.split(":")[1].strip())
-            elif "low" in line.lower():
-                low = float(line.split(":")[1].strip())
+            if is_red:
+                if not in_red_series:
+                    prev_red_low = last_red_low
+                    last_red_low = ha_low
+                    in_red_series = True
+                    in_green_series = False
+                else:
+                    last_red_low = min(last_red_low, ha_low)
 
-        if entry and signal_type:
-            if signal_type not in ["buy", "sell"]:
-                return JSONResponse(content={"error": "Invalid type"}, status_code=400)
-            if not signals[signal_type]["active"]:
-                signals[signal_type]["entry"] = entry
-                print(f"✅ Stored new entry for {signal_type.upper()}: {entry}")
+            if is_green:
+                if not in_green_series:
+                    prev_green_high = last_green_high
+                    last_green_high = ha_high
+                    in_green_series = True
+                    in_red_series = False
+                else:
+                    last_green_high = max(last_green_high, ha_high)
 
-                if signal_type not in monitor_tasks or monitor_tasks[signal_type].done():
-                    monitor_tasks[signal_type] = asyncio.create_task(monitor_price(signal_type))
+            buy_condition = is_red and in_red_series and prev_red_low is not None and last_red_low > prev_red_low
+            sell_condition = is_green and in_green_series and prev_green_high is not None and last_green_high < prev_green_high
 
-                return {"status": f"New entry stored for {signal_type.upper()}"}
-            else:
-                return {"status": f"Trade already active for {signal_type.upper()}, ignoring entry signal"}
+            if buy_condition and not signals["buy"]["active"]:
+                signals["buy"]["entry"] = (ha_close + ha_open) / 2
+                signals["buy"]["active"] = True
+                asyncio.create_task(monitor("buy"))
+                print(f"✅ New BUY signal stored at {signals['buy']['entry']}")
 
-        elif high and low:
-            for t in ["buy", "sell"]:
-                if not signals[t]["active"]:
-                    signals[t]["high"] = high
-                    signals[t]["low"] = low
-                    print(f"✅ Stored new high/low for {t.upper()}: High={high}, Low={low}")
-            return {"status": f"New high/low stored for non-active signals"}
+            if sell_condition and not signals["sell"]["active"]:
+                signals["sell"]["entry"] = (ha_close + ha_open) / 2
+                signals["sell"]["active"] = True
+                asyncio.create_task(monitor("sell"))
+                print(f"✅ New SELL signal stored at {signals['sell']['entry']}")
 
-        return JSONResponse(content={"error": "No valid entry or high/low found"}, status_code=400)
+        # Every 5 mins: update high/low
+        if now.minute % 5 == 0 and now.second < 10:
+            high, low = get_5m_high_low()
+            high_low["high"] = high
+            high_low["low"] = low
+            print(f"📊 Updated 5-min high/low: High={high}, Low={low}")
 
-    except Exception as e:
-        print("❌ Error:", str(e))
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        await asyncio.sleep(10)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(periodic_tasks())
 
 @app.get("/")
 def health():
