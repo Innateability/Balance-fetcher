@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import asyncio
 import os
 from pybit.unified_trading import HTTP
@@ -30,7 +30,9 @@ in_red_series, in_green_series = False, False
 
 # === Get Heikin Ashi candle (Bybit linear) ===
 def get_heikin_ashi_candle(timeframe="60"):
-    data = main_session.get_kline(category="linear", symbol="TRXUSDT", interval=timeframe, limit=2)["result"]["list"]
+    data = main_session.get_kline(
+        category="linear", symbol="TRXUSDT", interval=timeframe, limit=2
+    )["result"]["list"]
 
     k = data[-2]
     open_, high, low, close = map(float, k[1:5])
@@ -44,7 +46,9 @@ def get_heikin_ashi_candle(timeframe="60"):
 
 # === Get 5-min high/low candle ===
 def get_5m_high_low():
-    data = main_session.get_kline(category="linear", symbol="TRXUSDT", interval="5", limit=2)["result"]["list"]
+    data = main_session.get_kline(
+        category="linear", symbol="TRXUSDT", interval="5", limit=2
+    )["result"]["list"]
 
     k = data[-2]
     high = float(k[3])
@@ -114,7 +118,6 @@ def get_current_price():
     price = float(data["result"]["list"][0]["lastPrice"])
     return price
 
-# === Monitor task ===
 async def monitor(signal_type):
     session = sub_session if signal_type == "buy" else main_session
     label = "Sub" if signal_type == "buy" else "Main"
@@ -146,7 +149,10 @@ async def monitor(signal_type):
     while True:
         await asyncio.sleep(5)
         price = get_current_price()
-        print(f"📊 Current price: {price}")
+
+        now = datetime.utcnow()
+        if now.second == 0 and now.minute % 1 == 0:
+            print(f"📊 Current price: {price}")
 
         if (signal_type == "buy" and price >= entry) or (signal_type == "sell" and price <= entry):
             print(f"🚀 Entry price hit for {signal_type.upper()} at {price}")
@@ -179,7 +185,6 @@ async def monitor(signal_type):
             print(f"✅ Trade closed for {signal_type.upper()}, ready for new signals.")
             break
 
-# === Periodic tasks ===
 async def periodic_tasks():
     global last_red_low, prev_red_low, last_green_high, prev_green_high
     global in_red_series, in_green_series
@@ -187,8 +192,7 @@ async def periodic_tasks():
     while True:
         now = datetime.utcnow()
 
-        # Check hourly (1-hour candle logic)
-        if now.minute == 0:
+        if now.minute == 0 and now.second < 10:
             ha_open, ha_high, ha_low, ha_close = get_heikin_ashi_candle("60")
             is_green = ha_close > ha_open
             is_red = ha_close < ha_open
@@ -226,23 +230,17 @@ async def periodic_tasks():
                 asyncio.create_task(monitor("sell"))
                 print(f"✅ New SELL signal stored at {signals['sell']['entry']}")
 
-        # Every 5 mins: update high/low
-        if now.minute % 5 == 0:
+        if now.minute % 5 == 0 and now.second < 10:
             high, low = get_5m_high_low()
             high_low["high"] = high
             high_low["low"] = low
             print(f"📊 Updated 5-min high/low: High={high}, Low={low}")
-            await asyncio.sleep(60)  # Avoid multiple logs within same 5-min window
 
         await asyncio.sleep(10)
 
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(periodic_tasks())
-
-@app.get("/")
-def health():
-    return {"status": "Bot is online ✅"}
 
 @app.on_event("startup")
 async def heartbeat():
@@ -251,4 +249,17 @@ async def heartbeat():
             await asyncio.sleep(300)
             print("✅ Bot is running")
     asyncio.create_task(print_heartbeat())
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    body = (await request.body()).decode().strip().lower()
+    if body == "ok":
+        print("that is okay")
+        return {"message": "Received and logged"}
+    else:
+        return {"message": "Ignored"}
+
+@app.get("/")
+def health():
+    return {"status": "Bot is online ✅"}
     
