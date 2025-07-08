@@ -7,11 +7,14 @@ MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
 def get_available_usdt(session):
-    data = session.get_wallet_balance(accountType="UNIFIED")
-    coins = data["result"]["list"][0]["coin"]
-    usdt = next((c for c in coins if c["coin"] == "USDT"), None)
-    if usdt:
-        return float(usdt["availableToWithdraw"])
+    try:
+        data = session.get_wallet_balance(accountType="UNIFIED")
+        coins = data["result"]["list"][0]["coin"]
+        usdt = next((c for c in coins if c["coin"] == "USDT"), None)
+        if usdt and usdt.get("availableToWithdraw") not in [None, "", "null"]:
+            return float(usdt["availableToWithdraw"])
+    except Exception as e:
+        print("⚠️ Error fetching balance:", e)
     return 0
 
 # === Order parameters ===
