@@ -17,7 +17,7 @@ def create_limit_order():
             side="Buy",
             order_type="Limit",
             qty="17",
-            price="0.3",
+            price="0.2899",
             time_in_force="GTC",   # ✅ FIXED here
             reduce_only=False,
             close_on_trigger=False
