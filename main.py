@@ -38,4 +38,5 @@ def place_buy_limit_order():
 
     except Exception as e:
         print("❌ Error:", e)
-        return {"error": str(e)
+        return {"error": str(e)}
+        
