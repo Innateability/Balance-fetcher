@@ -16,7 +16,7 @@ def create_limit_order():
             symbol="TRXUSDT",
             side="Buy",
             order_type="Limit",
-            qty="20",
+            qty="17",
             price="0.3",
             time_in_force="GTC",   # ✅ FIXED here
             reduce_only=False,
