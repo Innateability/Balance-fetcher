@@ -29,7 +29,7 @@ async def place_order_on_startup():
         print(f"Available USDT before placing order: {available:.6f}")
 
         # Calculate required initial margin for 20 TRX at 0.3 with 75x leverage
-        price = 0.3
+        price = 0.28
         qty = 20
         leverage = 75
 
