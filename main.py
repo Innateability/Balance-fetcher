@@ -22,7 +22,9 @@ async def place_order_on_startup():
         balance_data = session.get_wallet_balance(accountType="UNIFIED")
         coins = balance_data["result"]["list"][0]["coin"]
         usdt = next((x for x in coins if x["coin"] == "USDT"), None)
-        available = float(usdt["availableToWithdraw"]) if usdt else 0.0
+
+        # Use walletBalance instead of availableToWithdraw
+        available = float(usdt["walletBalance"]) if usdt and usdt["walletBalance"] else 0.0
 
         print(f"Available USDT before placing order: {available:.6f}")
 
@@ -57,7 +59,7 @@ async def place_order_on_startup():
         balance_data_after = session.get_wallet_balance(accountType="UNIFIED")
         coins_after = balance_data_after["result"]["list"][0]["coin"]
         usdt_after = next((x for x in coins_after if x["coin"] == "USDT"), None)
-        available_after = float(usdt_after["availableToWithdraw"]) if usdt_after else 0.0
+        available_after = float(usdt_after["walletBalance"]) if usdt_after and usdt_after["walletBalance"] else 0.0
 
         print(f"💰 Available USDT after operation: {available_after:.6f}")
 
@@ -66,4 +68,3 @@ async def place_order_on_startup():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
-    
