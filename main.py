@@ -22,7 +22,13 @@ async def place_conditional_order_on_startup():
         balance_data = session.get_wallet_balance(accountType="UNIFIED")
         coins = balance_data["result"]["list"][0]["coin"]
         usdt = next((x for x in coins if x["coin"] == "USDT"), None)
-        available = float(usdt["availableToWithdraw"]) if usdt and usdt["availableToWithdraw"] else 0.0
+
+        if not usdt:
+            print("⚠️ USDT balance not found.")
+            return
+
+        # ✅ Use availableBalance instead of availableToWithdraw
+        available = float(usdt["availableBalance"]) if usdt.get("availableBalance") else 0.0
 
         print(f"💰 Available USDT before placing order: {available:.6f}")
 
@@ -60,7 +66,7 @@ async def place_conditional_order_on_startup():
         balance_data_after = session.get_wallet_balance(accountType="UNIFIED")
         coins_after = balance_data_after["result"]["list"][0]["coin"]
         usdt_after = next((x for x in coins_after if x["coin"] == "USDT"), None)
-        available_after = float(usdt_after["availableToWithdraw"]) if usdt_after and usdt_after["availableToWithdraw"] else 0.0
+        available_after = float(usdt_after["availableBalance"]) if usdt_after and usdt_after.get("availableBalance") else 0.0
 
         print(f"💰 Available USDT after operation: {available_after:.6f}")
 
