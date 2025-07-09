@@ -5,7 +5,7 @@ import uvicorn
 
 app = FastAPI()
 
-# === API keys ===
+# === API keys from environment ===
 MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 
@@ -16,21 +16,20 @@ async def root():
     return {"status": "Service is running ✅"}
 
 @app.on_event("startup")
-async def place_order_on_startup():
+async def place_conditional_order_on_startup():
     try:
-        # Get USDT balance before placing order
+        # Get balance before placing order
         balance_data = session.get_wallet_balance(accountType="UNIFIED")
         coins = balance_data["result"]["list"][0]["coin"]
         usdt = next((x for x in coins if x["coin"] == "USDT"), None)
+        available = float(usdt["availableToWithdraw"]) if usdt and usdt["availableToWithdraw"] else 0.0
 
-        # Use walletBalance instead of availableToWithdraw
-        available = float(usdt["walletBalance"]) if usdt and usdt["walletBalance"] else 0.0
+        print(f"💰 Available USDT before placing order: {available:.6f}")
 
-        print(f"Available USDT before placing order: {available:.6f}")
-
-        # Calculate required initial margin for 20 TRX at 0.3 with 75x leverage
-        price = 0.28
+        # Order parameters
+        price = 0.3      # Limit price
         qty = 20
+        trigger_price = 0.31  # Trigger price
         leverage = 75
 
         notional_value = price * qty
@@ -39,7 +38,7 @@ async def place_order_on_startup():
         print(f"📄 Required initial margin: {required_margin:.6f}")
 
         if available >= required_margin:
-            # Place limit order
+            # Place conditional limit order
             res = session.place_order(
                 category="linear",
                 symbol="TRXUSDT",
@@ -47,19 +46,21 @@ async def place_order_on_startup():
                 order_type="Limit",
                 qty=str(qty),
                 price=str(price),
+                trigger_price=str(trigger_price),
+                trigger_direction=1,  # 1 = triggers when price rises above trigger_price
                 time_in_force="GTC",
                 reduce_only=False,
                 close_on_trigger=False
             )
-            print("✅ Order response:", res)
+            print("✅ Order placed successfully:", res)
         else:
             print("⚠️ Not enough margin to place order.")
 
-        # Fetch balance again after operation
+        # Get balance after
         balance_data_after = session.get_wallet_balance(accountType="UNIFIED")
         coins_after = balance_data_after["result"]["list"][0]["coin"]
         usdt_after = next((x for x in coins_after if x["coin"] == "USDT"), None)
-        available_after = float(usdt_after["walletBalance"]) if usdt_after and usdt_after["walletBalance"] else 0.0
+        available_after = float(usdt_after["availableToWithdraw"]) if usdt_after and usdt_after["availableToWithdraw"] else 0.0
 
         print(f"💰 Available USDT after operation: {available_after:.6f}")
 
@@ -68,3 +69,4 @@ async def place_order_on_startup():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    
