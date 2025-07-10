@@ -33,7 +33,7 @@ async def place_conditional_order_on_startup():
         print(f"💰 Available USDT before placing order: {available:.6f}")
 
         # Order parameters
-        price = 0.28        # Limit price
+        price = 0.30       # Limit price
         qty = 20
         trigger_price = 0.29 # Trigger price
         leverage = 75
