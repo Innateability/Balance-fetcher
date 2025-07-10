@@ -9,6 +9,7 @@ app = FastAPI()
 MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 
+# Initialize Bybit session
 session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 
 @app.get("/")
@@ -27,15 +28,14 @@ async def place_conditional_order_on_startup():
             print("⚠️ USDT balance not found.")
             return
 
-        # ✅ Use availableBalance instead of availableToWithdraw
-        available = float(usdt["availableBalance"]) if usdt.get("availableBalance") else 0.0
-
+        # ✅ Use equity instead of availableBalance
+        available = float(usdt["equity"]) if usdt and usdt.get("equity") else 0.0
         print(f"💰 Available USDT before placing order: {available:.6f}")
 
         # Order parameters
-        price = 0.3      # Limit price
+        price = 0.3          # Limit price
         qty = 20
-        trigger_price = 0.31  # Trigger price
+        trigger_price = 0.31 # Trigger price
         leverage = 75
 
         notional_value = price * qty
@@ -53,7 +53,7 @@ async def place_conditional_order_on_startup():
                 qty=str(qty),
                 price=str(price),
                 trigger_price=str(trigger_price),
-                trigger_direction=1,  # 1 = triggers when price rises above trigger_price
+                trigger_direction=1,  # 1 = triggers when price rises above trigger price
                 time_in_force="GTC",
                 reduce_only=False,
                 close_on_trigger=False
@@ -62,11 +62,11 @@ async def place_conditional_order_on_startup():
         else:
             print("⚠️ Not enough margin to place order.")
 
-        # Get balance after
+        # Get balance after placing order
         balance_data_after = session.get_wallet_balance(accountType="UNIFIED")
         coins_after = balance_data_after["result"]["list"][0]["coin"]
         usdt_after = next((x for x in coins_after if x["coin"] == "USDT"), None)
-        available_after = float(usdt_after["availableBalance"]) if usdt_after and usdt_after.get("availableBalance") else 0.0
+        available_after = float(usdt_after["equity"]) if usdt_after and usdt_after.get("equity") else 0.0
 
         print(f"💰 Available USDT after operation: {available_after:.6f}")
 
