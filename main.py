@@ -33,9 +33,9 @@ async def place_conditional_order_on_startup():
         print(f"💰 Available USDT before placing order: {available:.6f}")
 
         # Order parameters
-        price = 0.3          # Limit price
+        price = 0.28        # Limit price
         qty = 20
-        trigger_price = 0.31 # Trigger price
+        trigger_price = 0.29 # Trigger price
         leverage = 75
 
         notional_value = price * qty
@@ -48,7 +48,7 @@ async def place_conditional_order_on_startup():
             res = session.place_order(
                 category="linear",
                 symbol="TRXUSDT",
-                side="Buy",
+                side="Sell",
                 order_type="Limit",
                 qty=str(qty),
                 price=str(price),
