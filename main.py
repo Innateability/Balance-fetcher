@@ -14,9 +14,10 @@ MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
+SUB_UID = os.getenv("SUB_UID")
+
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
-SUB_UID = os.getenv("SUB_UID")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
@@ -157,45 +158,41 @@ async def execute_trade(side, sl_price, tp_price):
     except Exception as e:
         print("❌ Failed to execute trade:", e)
 
-# === Background email checker ===
-async def email_checker_loop():
+# === Email monitoring ===
+async def check_emails():
     while True:
         try:
             mail = imaplib.IMAP4_SSL("imap.gmail.com")
             mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
             mail.select("inbox")
 
-            status, messages = mail.search(None, '(UNSEEN)')
-            if status == "OK":
-                for num in messages[0].split():
-                    status, msg_data = mail.fetch(num, "(RFC822)")
-                    if status != "OK":
-                        continue
-
-                    msg = email.message_from_bytes(msg_data[0][1])
-                    subject = msg["Subject"] or ""
-                    body = ""
-
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/plain":
-                                body += part.get_payload(decode=True).decode()
-                    else:
-                        body = msg.get_payload(decode=True).decode()
-
-                    full_message = f"Subject: {subject}\nBody: {body}"
-                    if "Tradingview" in full_message:
-                        print("📧 Tradingview email detected!\n", full_message)
+            result, data = mail.search(None, '(UNSEEN)')
+            if result == "OK":
+                ids = data[0].split()
+                for email_id in ids:
+                    res, msg_data = mail.fetch(email_id, "(RFC822)")
+                    if res == "OK":
+                        msg = email.message_from_bytes(msg_data[0][1])
+                        subject = msg["subject"]
+                        if "tradingview" in subject.lower():
+                            print("\n📧 TradingView email found!")
+                            print("Subject:", subject)
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    if part.get_content_type() == "text/plain":
+                                        print("Content:\n", part.get_payload(decode=True).decode())
+                            else:
+                                print("Content:\n", msg.get_payload(decode=True).decode())
 
             mail.logout()
         except Exception as e:
-            print("❌ Email checker error:", e)
+            print("❌ Email check error:", e)
 
-        await asyncio.sleep(5)  # check every 5 seconds
+        await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(email_checker_loop())
+    asyncio.create_task(check_emails())
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
