@@ -1,11 +1,9 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pybit.unified_trading import HTTP
 import os
 import uvicorn
 from datetime import datetime, timedelta
 import asyncio
-import imaplib
-import email
 
 app = FastAPI()
 
@@ -14,10 +12,6 @@ MAIN_API_KEY = os.getenv("MAIN_API_KEY")
 MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
 SUB_API_KEY = os.getenv("SUB_API_KEY")
 SUB_API_SECRET = os.getenv("SUB_API_SECRET")
-SUB_UID = os.getenv("SUB_UID")
-
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
 
 main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
 sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
@@ -27,80 +21,105 @@ symbol = "TRXUSDT"
 buy_window_until = None
 sell_window_until = None
 
-# === Balance helpers ===
+confirmed_buy_level = None
+confirmed_sell_level = None
+
+# === Helper functions ===
+def get_heikin_ashi(candles):
+    ha_open = (candles[0]["open"] + candles[0]["close"]) / 2
+    ha_candles = []
+    for c in candles:
+        ha_close = (c["open"] + c["high"] + c["low"] + c["close"]) / 4
+        ha_high = max(c["high"], ha_open, ha_close)
+        ha_low = min(c["low"], ha_open, ha_close)
+        ha_candle = {
+            "open": ha_open,
+            "close": ha_close,
+            "high": ha_high,
+            "low": ha_low,
+            "timestamp": c["start"]
+        }
+        ha_candles.append(ha_candle)
+        ha_open = (ha_open + ha_close) / 2
+    return ha_candles
+
+def get_recent_candles(session, interval, limit=2):
+    res = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
+    candles = []
+    for r in res["result"]["list"]:
+        candles.append({
+            "start": int(r[0]),
+            "open": float(r[1]),
+            "high": float(r[2]),
+            "low": float(r[3]),
+            "close": float(r[4])
+        })
+    candles.reverse()  # earliest first
+    return candles
+
+def calculate_tp_sl(entry, sl, is_buy):
+    rr = abs(entry - sl)
+    tp = entry + rr if is_buy else entry - rr
+    tp += (0.0007 * entry) if is_buy else -(0.0007 * entry)
+    return round(tp, 5), round(sl, 5)
+
 def get_usdt_balance(session):
     data = session.get_wallet_balance(accountType="UNIFIED")
     coins = data["result"]["list"][0]["coin"]
     usdt = next((x for x in coins if x["coin"] == "USDT"), None)
     return float(usdt["equity"]) if usdt else 0
 
-# === Calculate window close time ===
-def calculate_window_expiry():
-    now = datetime.utcnow()
-    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    expiry = next_hour + timedelta(hours=1)
-    return expiry
+async def monitor():
+    global buy_window_until, sell_window_until, confirmed_buy_level, confirmed_sell_level
 
-@app.get("/")
-async def health():
-    return {"status": "Bot is online ✅"}
+    last_buy_low = None
+    last_sell_high = None
 
-@app.post("/buy")
-async def open_buy_window():
-    global buy_window_until
-    buy_window_until = calculate_window_expiry()
-    print(f"🟢 Buy window open until {buy_window_until} UTC")
-    return {"status": f"Buy window open until {buy_window_until} UTC"}
+    while True:
+        try:
+            now = datetime.utcnow()
 
-@app.post("/sell")
-async def open_sell_window():
-    global sell_window_until
-    sell_window_until = calculate_window_expiry()
-    print(f"🔴 Sell window open until {sell_window_until} UTC")
-    return {"status": f"Sell window open until {sell_window_until} UTC"}
+            # === 1 hour check ===
+            candles_1h = get_recent_candles(main_session, "60")
+            ha_1h = get_heikin_ashi(candles_1h)[-1]
 
-@app.post("/entry")
-async def receive_entry(request: Request):
-    global buy_window_until, sell_window_until
+            open_price = ha_1h["open"]
+            current_price = ha_1h["close"]
 
-    text = (await request.body()).decode()
-    print("\n📩 Signal received:\n", text)
+            # Check for break above/below open
+            if current_price > open_price:
+                if confirmed_buy_level is None or ha_1h["low"] > (last_buy_low or 0):
+                    confirmed_buy_level = open_price
+                    buy_window_until = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+                    last_buy_low = ha_1h["low"]
+                    print(f"✅ Buy level confirmed at {confirmed_buy_level}. Window until {buy_window_until}")
 
-    try:
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        if not any("Entry" in l for l in lines):
-            return {"error": "Entry header missing"}
+            elif current_price < open_price:
+                if confirmed_sell_level is None or ha_1h["high"] < (last_sell_high or float("inf")):
+                    confirmed_sell_level = open_price
+                    sell_window_until = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+                    last_sell_high = ha_1h["high"]
+                    print(f"✅ Sell level confirmed at {confirmed_sell_level}. Window until {sell_window_until}")
 
-        type_line = next(l for l in lines if l.lower().startswith("type"))
-        entry_type = int(type_line.split(":")[1].strip())
+            # === 5-minute check ===
+            candles_5m = get_recent_candles(main_session, "5")
+            ha_5m = get_heikin_ashi(candles_5m)[-1]
+            current_5m_close = ha_5m["close"]
 
-        buy_sl = float(next(l.split(":")[1].strip() for l in lines if l.lower().startswith("buy sl")))
-        buy_tp = float(next(l.split(":")[1].strip() for l in lines if l.lower().startswith("buy tp")))
-        sell_sl = float(next(l.split(":")[1].strip() for l in lines if l.lower().startswith("sell sl")))
-        sell_tp = float(next(l.split(":")[1].strip() for l in lines if l.lower().startswith("sell tp")))
+            if confirmed_buy_level and now < buy_window_until and current_5m_close > confirmed_buy_level:
+                await execute_trade("buy", ha_5m["low"])
+                confirmed_buy_level = None  # only use once
 
-        now = datetime.utcnow()
+            if confirmed_sell_level and now < sell_window_until and current_5m_close < confirmed_sell_level:
+                await execute_trade("sell", ha_5m["high"])
+                confirmed_sell_level = None  # only use once
 
-        if entry_type == 0:
-            if not buy_window_until or now > buy_window_until:
-                return {"status": "Buy window not active."}
-            await execute_trade("buy", buy_sl, buy_tp)
-            return {"status": "Buy trade executed."}
+        except Exception as e:
+            print("❌ Monitor error:", e)
 
-        elif entry_type == 1:
-            if not sell_window_until or now > sell_window_until:
-                return {"status": "Sell window not active."}
-            await execute_trade("sell", sell_sl, sell_tp)
-            return {"status": "Sell trade executed."}
+        await asyncio.sleep(300)  # every 5 minutes
 
-        else:
-            return {"error": "Invalid Type value"}
-
-    except Exception as e:
-        print("❌ Error parsing signal:", e)
-        return {"error": str(e)}
-
-async def execute_trade(side, sl_price, tp_price):
+async def execute_trade(side, sequence_level):
     try:
         session = sub_session if side == "buy" else main_session
         label = "Sub" if side == "buy" else "Main"
@@ -113,15 +132,17 @@ async def execute_trade(side, sl_price, tp_price):
         qty_usdt = risk_amount if account_balance >= risk_amount else fallback_balance
 
         current_price = float(session.get_tickers(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+        sl_price = sequence_level
+        tp_price, sl_price = calculate_tp_sl(current_price, sl_price, is_buy=(side == "buy"))
+
         sl_diff = abs(current_price - sl_price)
         leverage = 75
         qty_estimated = qty_usdt / sl_diff
         max_qty = ((account_balance * leverage) / current_price) * 0.9
         qty = max(1, round(min(qty_estimated, max_qty)))
 
-        print(f"Placing {side.upper()} market order. Qty: {qty}, Entry: {current_price}")
+        print(f"🚨 Placing {side.upper()} market order. Qty: {qty}, Entry: {current_price}, SL: {sl_price}, TP: {tp_price}")
 
-        # Place market order
         order_res = session.place_order(
             category="linear",
             symbol=symbol,
@@ -132,7 +153,7 @@ async def execute_trade(side, sl_price, tp_price):
         )
         print(f"✅ {label} Market order placed:", order_res)
 
-        # TP and SL reduce-only orders
+        # Place TP and SL orders
         tick_size = float(session.get_instruments_info(category="linear", symbol=symbol)['result']['list'][0]['priceFilter']['tickSize'])
         round_price = lambda x: round(round(x / tick_size) * tick_size, 8)
 
@@ -156,43 +177,15 @@ async def execute_trade(side, sl_price, tp_price):
         print(f"🎯 TP and 🛡️ SL orders placed: TP={tp_price_rounded}, SL={sl_price_rounded}")
 
     except Exception as e:
-        print("❌ Failed to execute trade:", e)
-
-# === Email monitoring ===
-async def check_emails():
-    while True:
-        try:
-            mail = imaplib.IMAP4_SSL("imap.gmail.com")
-            mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
-            mail.select("inbox")
-
-            result, data = mail.search(None, '(UNSEEN)')
-            if result == "OK":
-                ids = data[0].split()
-                for email_id in ids:
-                    res, msg_data = mail.fetch(email_id, "(RFC822)")
-                    if res == "OK":
-                        msg = email.message_from_bytes(msg_data[0][1])
-                        subject = msg["subject"]
-                        if "tradingview" in subject.lower():
-                            print("\n📧 TradingView email found!")
-                            print("Subject:", subject)
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    if part.get_content_type() == "text/plain":
-                                        print("Content:\n", part.get_payload(decode=True).decode())
-                            else:
-                                print("Content:\n", msg.get_payload(decode=True).decode())
-
-            mail.logout()
-        except Exception as e:
-            print("❌ Email check error:", e)
-
-        await asyncio.sleep(5)
+        print("❌ Trade execution error:", e)
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(check_emails())
+    asyncio.create_task(monitor())
+
+@app.get("/")
+async def health():
+    return {"status": "Bot is running ✅"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
