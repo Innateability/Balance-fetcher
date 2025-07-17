@@ -141,6 +141,8 @@ async def check_signals():
             last_5m = candles_5m[-2]
 
             price = last_5m["ha_close"]
+            print(f"🕔 5m HA Close: {price}")
+            
 
             if confirmed_buy_level and price > confirmed_buy_level:
                 print("🚀 5m Buy trigger matched, entering trade")
