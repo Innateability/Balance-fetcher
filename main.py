@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pybit.unified_trading import HTTP
 import os
 import uvicorn
@@ -65,7 +65,6 @@ async def monitor_balance_and_transfer():
                 )
                 print("✅ Transfer result:", res)
 
-                # Update baseline after transfer
                 baseline_balance = get_usdt_balance(main_session) + get_usdt_balance(sub_session)
                 print(f"📊 New baseline set to: {baseline_balance}")
 
@@ -74,13 +73,11 @@ async def monitor_balance_and_transfer():
 
         await asyncio.sleep(60)
 
-# === Candle utilities (get Heikin Ashi data) ===
 def fetch_heikin_ashi(session, interval):
     raw = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=3)["result"]["list"]
     candles = []
     for k in raw:
         open_p, high_p, low_p, close_p = map(float, k[1:5])
-        # Heikin Ashi formula
         ha_close = (open_p + high_p + low_p + close_p) / 4
         if len(candles) == 0:
             ha_open = (open_p + close_p) / 2
@@ -106,7 +103,6 @@ async def check_signals():
             candles_1h = fetch_heikin_ashi(main_session, "60")
             last_1h = candles_1h[-2]
 
-            # Check for 1h buy level
             if last_1h["ha_close"] > last_1h["ha_open"]:
                 if buy_seq_low is None:
                     buy_seq_low = last_1h["ha_low"]
@@ -121,7 +117,6 @@ async def check_signals():
                         print("✅ Confirmed 1h buy level:", confirmed_buy_level)
                     buy_seq_low = None
 
-            # Check for 1h sell level
             if last_1h["ha_close"] < last_1h["ha_open"]:
                 if sell_seq_high is None:
                     sell_seq_high = last_1h["ha_high"]
@@ -136,21 +131,18 @@ async def check_signals():
                         print("✅ Confirmed 1h sell level:", confirmed_sell_level)
                     sell_seq_high = None
 
-            # Check 5m trigger
             candles_5m = fetch_heikin_ashi(main_session, "5")
             last_5m = candles_5m[-2]
-
             price = last_5m["ha_close"]
             print(f"🕔 5m HA Close: {price}")
-            
 
             if confirmed_buy_level and price > confirmed_buy_level:
-                print("🚀 5m Buy trigger matched, entering trade")
+                print("🚀 5m Buy trigger matched")
                 await execute_trade("buy", price)
                 confirmed_buy_level = None
 
             if confirmed_sell_level and price < confirmed_sell_level:
-                print("🚀 5m Sell trigger matched, entering trade")
+                print("🚀 5m Sell trigger matched")
                 await execute_trade("sell", price)
                 confirmed_sell_level = None
 
@@ -209,15 +201,30 @@ async def execute_trade(side, entry_price):
     except Exception as e:
         print("❌ Error placing trade:", e)
 
+@app.get("/")
+async def root():
+    return {"status": "Bot is running ✅"}
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    body = data.get("body", "") or data.get("content", "")
+    print("📨 Webhook Received:", body)
+
+    # Optional parse
+    parsed = {}
+    for line in body.strip().splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            parsed[key.strip().lower()] = value.strip()
+
+    print("✅ Parsed Content:", parsed)
+    return {"ok": True, "parsed": parsed}
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(monitor_balance_and_transfer())
     asyncio.create_task(check_signals())
 
-@app.get("/")
-async def root():
-    return {"status": "Bot is running ✅"}
-
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
-    
