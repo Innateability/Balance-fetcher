@@ -4,6 +4,7 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    plan: free
     envVars:
       - key: MAIN_API_KEY
         value: your_main_api_key
@@ -13,4 +14,22 @@ services:
         value: your_sub_api_key
       - key: SUB_API_SECRET
         value: your_sub_api_secret
+      - key: SPARE_API_KEY
+        value: your_spare_api_key
+      - key: SPARE_API_SECRET
+        value: your_spare_api_secret
+      - key: BYBIT_MAIN_UID
+        value: your_main_account_uid
+      - key: BYBIT_SUB_UID
+        value: your_sub_account_uid
+      - key: BYBIT_SPARE_UID
+        value: your_spare_account_uid
+      - key: EMAIL_HOST
+        value: smtp.gmail.com
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_ADDRESS
+        value: your_email@gmail.com
+      - key: EMAIL_PASSWORD
+        value: your_email_app_password
         
