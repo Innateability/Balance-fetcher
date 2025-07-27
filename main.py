@@ -37,6 +37,14 @@ app = FastAPI()
 def read_root():
     return JSONResponse(content={"message": "Bybit bot is running."})
 
+@app.get("/ping")
+async def ping():
+    return {"status": "alive"}  # ✅ Keep-alive endpoint for UptimeRobot
+
+@app.post("/trigger")
+async def trigger_signal(request: Request):
+    run_once()
+    return JSONResponse(content={"status": "signal triggered"})
 
 # === AUTH HELPERS ===
 def headers(api_key):
@@ -44,7 +52,6 @@ def headers(api_key):
         "Content-Type": "application/json",
         "X-BYBIT-API-KEY": api_key
     }
-
 
 # === CANDLE + STRATEGY ===
 def fetch_candles(interval="5"):
@@ -65,7 +72,6 @@ def fetch_candles(interval="5"):
         "close": float(c[4])
     } for c in data]))
 
-
 def to_heikin_ashi(candles: List[Dict]) -> List[Dict]:
     ha = []
     for i, c in enumerate(candles):
@@ -81,7 +87,6 @@ def to_heikin_ashi(candles: List[Dict]) -> List[Dict]:
             "close": close
         })
     return ha
-
 
 def check_buy_sell_signal(ha_candles):
     global last_buy_level, last_sell_level
@@ -113,20 +118,17 @@ def check_buy_sell_signal(ha_candles):
             return {"type": "sell", "entry": cur["close"], "sl": high}
     return None
 
-
 # === TRADING & BALANCE ===
 def get_account_balance(api_key, api_secret):
     url = f"{BASE_URL}/v5/account/wallet-balance?accountType=UNIFIED"
     response = requests.get(url, headers=headers(api_key))
     return float(response.json()["result"]["list"][0]["totalEquity"])
 
-
 def calculate_tp(entry, sl, direction):
     risk = abs(entry - sl)
     tp = entry + (risk * RR) if direction == "buy" else entry - (risk * RR)
     buffer = entry * RR_BUFFER
     return tp + buffer if direction == "buy" else tp - buffer
-
 
 def execute_trade(signal):
     key, secret = (SUB_API_KEY, SUB_API_SECRET) if signal["type"] == "buy" else (MAIN_API_KEY, MAIN_API_SECRET)
@@ -141,7 +143,7 @@ def execute_trade(signal):
     tp = calculate_tp(entry, sl, signal["type"])
 
     print(f"[{signal['type'].upper()}] Entry: {entry}, SL: {sl}, TP: {tp}, Qty: {qty}")
-    # You should place a real market order here with Bybit's authenticated endpoint
+    # TODO: Add Bybit market order execution logic here
 
     trade_history.append({
         "type": signal["type"],
@@ -153,16 +155,13 @@ def execute_trade(signal):
         "timestamp": datetime.utcnow().isoformat()
     })
 
-
 def rebalance_funds():
     print("Rebalancing funds between main and sub...")
-
 
 def split_balance_if_doubled():
     print("Checking if balance doubled for split...")
 
-
-# === MAIN LOOP ===
+# === MAIN STRATEGY LOOP ===
 def run_once():
     global pending_signal
     raw_candles = fetch_candles("5")
@@ -175,13 +174,7 @@ def run_once():
         rebalance_funds()
         split_balance_if_doubled()
 
-
-# Optional webhook to trigger run_once remotely
-@app.post("/trigger")
-async def trigger_signal(request: Request):
-    run_once()
-    return JSONResponse(content={"status": "signal triggered"})
-
+# === ENTRY POINT ===
 if __name__ == "__main__":
     run_once()
     
