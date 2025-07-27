@@ -182,4 +182,14 @@ def run():
 
 if __name__ == "__main__":
     run()
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return JSONResponse(content={"message": "Bybit bot is running."})
+
+
     
