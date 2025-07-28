@@ -1,184 +1,228 @@
-import requests
 import time
-import hmac
-import hashlib
 import json
-from datetime import datetime
-from typing import List, Dict
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import math
+import requests
+from datetime import datetime, timedelta
+from pybit.unified_trading import HTTP
+from dotenv import load_dotenv
+import os
 
-# === USER CONFIGURATION ===
-MAIN_API_KEY = "YOUR_MAIN_API_KEY"
-MAIN_API_SECRET = "YOUR_MAIN_API_SECRET"
-SUB_API_KEY = "YOUR_SUB_API_KEY"
-SUB_API_SECRET = "YOUR_SUB_API_SECRET"
-SPARE_SUB_ACCOUNT_ID = "spare_sub_id"
+load_dotenv()
 
-BASE_URL = "https://api.bybit.com"
+# ENVIRONMENT VARIABLES
+MAIN_API_KEY = os.getenv("MAIN_API_KEY")
+MAIN_API_SECRET = os.getenv("MAIN_API_SECRET")
+SUB_API_KEY = os.getenv("SUB_API_KEY")
+SUB_API_SECRET = os.getenv("SUB_API_SECRET")
+
+main_session = HTTP(api_key=MAIN_API_KEY, api_secret=MAIN_API_SECRET)
+sub_session = HTTP(api_key=SUB_API_KEY, api_secret=SUB_API_SECRET)
+
 SYMBOL = "TRXUSDT"
-RISK_PERCENT = 0.10
-LEVERAGE = 75
-CONFIRMATION_EXPIRY = 60 * 60  # 1 hour
-RR = 1
-RR_BUFFER = 0.0007
+INTERVAL_5M = 5
+INTERVAL_1H = 60
+TP_BUFFER = 0.0007  # 0.07%
+RISK_PERCENT = 0.1  # 10%
 
-# === GLOBAL STATE ===
-candles: List[Dict] = []
-last_buy_level = 0
-last_sell_level = 999999
-pending_signal = None
-trade_history = []
+DATA_FILE = "trade_data.json"
 
-# === FASTAPI APP ===
-app = FastAPI()
+def fetch_ohlc(session, interval, limit):
+    res = session.get_kline(
+        category="linear",
+        symbol=SYMBOL,
+        interval=str(interval),
+        limit=limit
+    )
+    return res["result"]["list"]
 
-@app.get("/")
-def read_root():
-    return JSONResponse(content={"message": "Bybit bot is running."})
+def to_heikin_ashi(ohlc):
+    ha_candles = []
+    for i, candle in enumerate(ohlc):
+        t, o, h, l, c, *_ = map(float, candle[:5])
+        if i == 0:
+            ha_open = (o + c) / 2
+        else:
+            ha_open = (ha_candles[-1][1] + ha_candles[-1][4]) / 2
+        ha_close = (o + h + l + c) / 4
+        ha_high = max(h, ha_open, ha_close)
+        ha_low = min(l, ha_open, ha_close)
+        ha_candles.append([t, ha_open, ha_high, ha_low, ha_close])
+    return ha_candles
 
-@app.get("/ping")
-async def ping():
-    return {"status": "alive"}
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-@app.post("/trigger")
-async def trigger_signal(request: Request):
-    run_once()
-    return JSONResponse(content={"status": "signal triggered"})
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {"trades": [], "last_sequence": {"buy": None, "sell": None}, "confirmed": {}}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
-# === AUTH HELPERS ===
-def headers(api_key):
-    return {
-        "Content-Type": "application/json",
-        "X-BYBIT-API-KEY": api_key
-    }
+def get_balance(session):
+    res = session.get_wallet_balance(accountType="UNIFIED", coin="USDT")
+    return float(res["result"]["list"][0]["coin"][0]["availableToTrade"])
 
-# === CANDLE + STRATEGY ===
-def fetch_candles(interval="5"):
-    url = f"{BASE_URL}/v5/market/kline"
-    params = {
-        "category": "linear",
-        "symbol": SYMBOL,
-        "interval": interval,
-        "limit": 200
-    }
-    response = requests.get(url, params=params)
-    data = response.json()["result"]["list"]
-    return list(reversed([{
-        "timestamp": int(c[0]),
-        "open": float(c[1]),
-        "high": float(c[2]),
-        "low": float(c[3]),
-        "close": float(c[4])
-    } for c in data]))
+def detect_sequence(candles, type_):
+    sequence = []
+    for candle in reversed(candles[:-1]):
+        is_green = candle[4] > candle[1]
+        if (type_ == "buy" and is_green) or (type_ == "sell" and not is_green):
+            break
+        sequence.insert(0, candle)
+    return sequence
 
-def to_heikin_ashi(candles: List[Dict]) -> List[Dict]:
-    ha = []
-    for i, c in enumerate(candles):
-        close = (c["open"] + c["high"] + c["low"] + c["close"]) / 4
-        open_ = (c["open"] + c["close"]) / 2 if i == 0 else (ha[i - 1]["open"] + ha[i - 1]["close"]) / 2
-        high = max(c["high"], open_, close)
-        low = min(c["low"], open_, close)
-        ha.append({
-            "timestamp": c["timestamp"],
-            "open": open_,
-            "high": high,
-            "low": low,
-            "close": close
-        })
-        color = "GREEN" if close > open_ else "RED"
-        print(f"[{datetime.utcfromtimestamp(c['timestamp'] // 1000)}] {color} Candle - Open: {open_}, Close: {close}, High: {high}, Low: {low}")
-    return ha
+def signal_trigger(data, candles):
+    last = candles[-1]
+    signal = None
 
-def check_buy_sell_signal(ha_candles):
-    global last_buy_level, last_sell_level
-    i = len(ha_candles) - 1
-    cur = ha_candles[i]
-    prevs = ha_candles[:i]
+    if last[4] > last[1]:  # green
+        red_seq = detect_sequence(candles, "sell")
+        if len(red_seq) >= 2:
+            last_low = min(c[3] for c in red_seq)
+            prev_low = data["last_sequence"]["buy"]
+            if not prev_low or last_low > prev_low:
+                signal = {"type": "buy", "entry": last[4], "sl": last_low}
+                data["last_sequence"]["buy"] = last_low
 
-    def get_sequence(candles, color):
-        seq = []
-        for c in reversed(candles):
-            if (c["close"] > c["open"]) == color:
-                seq.insert(0, c)
-            else:
-                break
-        return seq
+    elif last[4] < last[1]:  # red
+        green_seq = detect_sequence(candles, "buy")
+        if len(green_seq) >= 2:
+            last_high = max(c[2] for c in green_seq)
+            prev_high = data["last_sequence"]["sell"]
+            if not prev_high or last_high < prev_high:
+                signal = {"type": "sell", "entry": last[4], "sl": last_high}
+                data["last_sequence"]["sell"] = last_high
 
-    red_seq = get_sequence(prevs, False)
-    green_seq = get_sequence(prevs, True)
+    return signal
 
-    if cur["close"] > cur["open"]:  # Green
-        low = min(c["low"] for c in red_seq) if red_seq else None
-        if low and low > last_buy_level:
-            last_buy_level = low
-            print(f"🔼 Red-to-Green change: LOW={low}")
-            return {"type": "buy", "entry": cur["close"], "sl": low}
-    elif cur["close"] < cur["open"]:  # Red
-        high = max(c["high"] for c in green_seq) if green_seq else None
-        if high and high < last_sell_level:
-            last_sell_level = high
-            print(f"🔻 Green-to-Red change: HIGH={high}")
-            return {"type": "sell", "entry": cur["close"], "sl": high}
-    return None
+def confirm_signal(signal, h1_candles):
+    last_hour = h1_candles[-1]
+    if signal["type"] == "buy" and last_hour[4] > last_hour[1]:
+        return True
+    if signal["type"] == "sell" and last_hour[4] < last_hour[1]:
+        return True
+    return False
 
-# === TRADING & BALANCE ===
-def get_account_balance(api_key, api_secret):
-    url = f"{BASE_URL}/v5/account/wallet-balance?accountType=UNIFIED"
-    response = requests.get(url, headers=headers(api_key))
-    return float(response.json()["result"]["list"][0]["totalEquity"])
-
-def calculate_tp(entry, sl, direction):
+def calc_tp(entry, sl, type_):
     risk = abs(entry - sl)
-    tp = entry + (risk * RR) if direction == "buy" else entry - (risk * RR)
-    buffer = entry * RR_BUFFER
-    return tp + buffer if direction == "buy" else tp - buffer
+    tp = entry + risk + (entry * TP_BUFFER) if type_ == "buy" else entry - risk - (entry * TP_BUFFER)
+    return round(tp, 5)
 
-def execute_trade(signal):
-    key, secret = (SUB_API_KEY, SUB_API_SECRET) if signal["type"] == "buy" else (MAIN_API_KEY, MAIN_API_SECRET)
-    bal_main = get_account_balance(MAIN_API_KEY, MAIN_API_SECRET)
-    bal_sub = get_account_balance(SUB_API_KEY, SUB_API_SECRET)
-    total = bal_main + bal_sub
-    qty_fund = total * RISK_PERCENT
-
+def place_order(signal, session):
     entry, sl = signal["entry"], signal["sl"]
-    risk = abs(entry - sl)
-    qty = round(qty_fund / risk * LEVERAGE, 1)
-    tp = calculate_tp(entry, sl, signal["type"])
+    tp = calc_tp(entry, sl, signal["type"])
 
-    print(f"[{signal['type'].upper()}] Entry: {entry}, SL: {sl}, TP: {tp}, Qty: {qty}")
-    # TODO: Add Bybit market order execution logic here
+    balance_main = get_balance(main_session)
+    balance_sub = get_balance(sub_session)
+    total_balance = balance_main + balance_sub
+    risk_amount = total_balance * RISK_PERCENT
+    quantity = round(risk_amount / abs(entry - sl), 2)
 
-    trade_history.append({
-        "type": signal["type"],
+    fallback_quantity = round((balance_main * 0.9 if signal["type"] == "sell" else balance_sub * 0.9) / abs(entry - sl), 2)
+    if quantity * abs(entry - sl) > (balance_main if signal["type"] == "sell" else balance_sub):
+        quantity = fallback_quantity
+
+    side = "Buy" if signal["type"] == "buy" else "Sell"
+    close_side = "Sell" if side == "Buy" else "Buy"
+    account = sub_session if signal["type"] == "buy" else main_session
+
+    print(f"Placing {side} trade: entry={entry}, SL={sl}, TP={tp}, qty={quantity}")
+
+    # Main trade
+    account.place_order(
+        category="linear",
+        symbol=SYMBOL,
+        side=side,
+        orderType="Market",
+        qty=quantity,
+        positionIdx=3
+    )
+
+    # TP
+    account.place_order(
+        category="linear",
+        symbol=SYMBOL,
+        side=close_side,
+        orderType="Limit",
+        qty=quantity,
+        price=str(tp),
+        timeInForce="GTC",
+        reduceOnly=True,
+        positionIdx=3
+    )
+
+    # SL
+    account.place_order(
+        category="linear",
+        symbol=SYMBOL,
+        side=close_side,
+        orderType="Limit",
+        qty=quantity,
+        price=str(sl),
+        timeInForce="GTC",
+        reduceOnly=True,
+        positionIdx=3
+    )
+
+    return {
         "entry": entry,
         "sl": sl,
         "tp": tp,
-        "qty": qty,
+        "type": signal["type"],
+        "quantity": quantity,
         "status": "open",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+        "timestamp": time.time()
+    }
 
-def rebalance_funds():
-    print("Rebalancing funds between main and sub...")
+def rebalance():
+    b1 = get_balance(main_session)
+    b2 = get_balance(sub_session)
+    total = b1 + b2
+    if total == 0:
+        return
+    if total >= 2 * load_data().get("last_split", 0):
+        split_amount = total / 2
+        print("Splitting balance...")
+        # You must implement fund transfer here based on your Bybit API sub-account/margin logic
 
-def split_balance_if_doubled():
-    print("Checking if balance doubled for split...")
+def loop():
+    while True:
+        try:
+            print(f"\nChecking @ {datetime.utcnow().strftime('%H:%M:%S')} UTC")
 
-# === MAIN STRATEGY LOOP ===
-def run_once():
-    global pending_signal
-    raw_candles = fetch_candles("5")
-    ha_candles = to_heikin_ashi(raw_candles)
-    signal = check_buy_sell_signal(ha_candles)
+            data = load_data()
 
-    if signal:
-        print(f"Signal detected: {signal}")
-        execute_trade(signal)
-        rebalance_funds()
-        split_balance_if_doubled()
+            ohlc_5m = fetch_ohlc(main_session, INTERVAL_5M, 100)
+            ha_5m = to_heikin_ashi(ohlc_5m)
 
-# === ENTRY POINT ===
+            ohlc_1h = fetch_ohlc(main_session, INTERVAL_1H, 3)
+            ha_1h = to_heikin_ashi(ohlc_1h)
+
+            now = datetime.utcnow()
+            signal = signal_trigger(data, ha_5m)
+
+            if signal:
+                current_hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
+                if data["confirmed"].get("hour") != current_hour:
+                    if confirm_signal(signal, ha_1h):
+                        trade = place_order(signal, sub_session if signal["type"] == "buy" else main_session)
+                        data["trades"].append(trade)
+                        data["confirmed"]["hour"] = current_hour
+                        save_data(data)
+                        rebalance()
+                    else:
+                        print("Signal not confirmed")
+                else:
+                    print("Signal already used this hour")
+            else:
+                print("No valid signal")
+
+        except Exception as e:
+            print("Error:", e)
+
+        time.sleep(300)  # 5-minute interval
+
 if __name__ == "__main__":
-    run_once()
+    loop()
     
