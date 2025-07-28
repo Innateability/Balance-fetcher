@@ -13,7 +13,7 @@ MAIN_API_KEY = "YOUR_MAIN_API_KEY"
 MAIN_API_SECRET = "YOUR_MAIN_API_SECRET"
 SUB_API_KEY = "YOUR_SUB_API_KEY"
 SUB_API_SECRET = "YOUR_SUB_API_SECRET"
-SPARE_SUB_ACCOUNT_ID = "spare_sub_id"  # Optional
+SPARE_SUB_ACCOUNT_ID = "spare_sub_id"
 
 BASE_URL = "https://api.bybit.com"
 SYMBOL = "TRXUSDT"
@@ -21,7 +21,7 @@ RISK_PERCENT = 0.10
 LEVERAGE = 75
 CONFIRMATION_EXPIRY = 60 * 60  # 1 hour
 RR = 1
-RR_BUFFER = 0.0007  # 0.07%
+RR_BUFFER = 0.0007
 
 # === GLOBAL STATE ===
 candles: List[Dict] = []
@@ -39,7 +39,7 @@ def read_root():
 
 @app.get("/ping")
 async def ping():
-    return {"status": "alive"}  # ✅ Keep-alive endpoint for UptimeRobot
+    return {"status": "alive"}
 
 @app.post("/trigger")
 async def trigger_signal(request: Request):
@@ -86,6 +86,8 @@ def to_heikin_ashi(candles: List[Dict]) -> List[Dict]:
             "low": low,
             "close": close
         })
+        color = "GREEN" if close > open_ else "RED"
+        print(f"[{datetime.utcfromtimestamp(c['timestamp'] // 1000)}] {color} Candle - Open: {open_}, Close: {close}, High: {high}, Low: {low}")
     return ha
 
 def check_buy_sell_signal(ha_candles):
@@ -106,15 +108,17 @@ def check_buy_sell_signal(ha_candles):
     red_seq = get_sequence(prevs, False)
     green_seq = get_sequence(prevs, True)
 
-    if cur["close"] > cur["open"]:
-        low = min(c["low"] for c in red_seq)
-        if low > last_buy_level:
+    if cur["close"] > cur["open"]:  # Green
+        low = min(c["low"] for c in red_seq) if red_seq else None
+        if low and low > last_buy_level:
             last_buy_level = low
+            print(f"🔼 Red-to-Green change: LOW={low}")
             return {"type": "buy", "entry": cur["close"], "sl": low}
-    elif cur["close"] < cur["open"]:
-        high = max(c["high"] for c in green_seq)
-        if high < last_sell_level:
+    elif cur["close"] < cur["open"]:  # Red
+        high = max(c["high"] for c in green_seq) if green_seq else None
+        if high and high < last_sell_level:
             last_sell_level = high
+            print(f"🔻 Green-to-Red change: HIGH={high}")
             return {"type": "sell", "entry": cur["close"], "sl": high}
     return None
 
