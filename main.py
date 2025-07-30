@@ -196,6 +196,12 @@ def loop():
             ohlc_5m = fetch_ohlc(main_session, INTERVAL_5M, 100)
             ha_5m = to_heikin_ashi(ohlc_5m)
 
+            # ✅ Print latest Heikin Ashi candle's OHLC
+            last_candle = ha_5m[-1]
+            candle_time = datetime.utcfromtimestamp(last_candle[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"Latest HA Candle @ {candle_time} — Open: {last_candle[1]:.5f}, High: {last_candle[2]:.5f}, "
+                  f"Low: {last_candle[3]:.5f}, Close: {last_candle[4]:.5f}")
+
             ohlc_1h = fetch_ohlc(main_session, INTERVAL_1H, 3)
             ha_1h = to_heikin_ashi(ohlc_1h)
 
@@ -222,7 +228,7 @@ def loop():
             print("Error:", e)
 
         time.sleep(300)  # 5-minute interval
-
+        
 if __name__ == "__main__":
     loop()
 from fastapi import FastAPI
