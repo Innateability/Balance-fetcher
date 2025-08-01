@@ -3,9 +3,11 @@ import requests
 import logging
 
 app = FastAPI()
-
-# Setup logging
 logging.basicConfig(level=logging.INFO)
+
+@app.get("/")
+def root():
+    return {"message": "Service is alive"}
 
 @app.api_route("/ping", methods=["GET", "HEAD"])
 async def ping(request: Request):
@@ -13,7 +15,7 @@ async def ping(request: Request):
     interval = "5"
     limit = 1
 
-    url = f"https://api.bybit.com/v5/market/kline"
+    url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
@@ -25,7 +27,7 @@ async def ping(request: Request):
         response = requests.get(url, params=params)
         data = response.json()
 
-        if data["retCode"] != 0:
+        if data.get("retCode") != 0:
             logging.error(f"Bybit API error: {data}")
             return {"error": "Failed to fetch kline data"}
 
@@ -37,7 +39,6 @@ async def ping(request: Request):
 
         logging.info(f"{symbol} (5m) - Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
 
-        # For HEAD request, return an empty response with status 200
         if request.method == "HEAD":
             return {}
 
