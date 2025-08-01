@@ -4,18 +4,16 @@ import logging
 
 app = FastAPI()
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 
 @app.api_route("/ping", methods=["GET", "HEAD"])
-async def handle_ping(request: Request):
-    if request.method == "HEAD":
-        return {"status": "ok"}  # Respond without processing data
-
+async def ping(request: Request):
     symbol = "TRXUSDT"
     interval = "5"
     limit = 1
 
-    url = "https://api.bybit.com/v5/market/kline"
+    url = f"https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
@@ -39,7 +37,16 @@ async def handle_ping(request: Request):
 
         logging.info(f"{symbol} (5m) - Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
 
-        return {"status": "ok"}
+        # For HEAD request, return an empty response with status 200
+        if request.method == "HEAD":
+            return {}
+
+        return {
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price
+        }
 
     except Exception as e:
         logging.error(f"Exception: {e}")
