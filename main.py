@@ -1,19 +1,21 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import requests
 import logging
 
 app = FastAPI()
 
-# Set up basic logging
 logging.basicConfig(level=logging.INFO)
 
-@app.get("/ping")
-async def handle_ping():
+@app.api_route("/ping", methods=["GET", "HEAD"])
+async def handle_ping(request: Request):
+    if request.method == "HEAD":
+        return {"status": "ok"}  # Respond without processing data
+
     symbol = "TRXUSDT"
     interval = "5"
     limit = 1
 
-    url = f"https://api.bybit.com/v5/market/kline"
+    url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol": symbol,
