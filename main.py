@@ -1,54 +1,75 @@
-from fastapi import FastAPI, Request
-import requests
+#!/usr/bin/env python3
+"""
+transfer.py
+Send 0.1 USDT from Unified Trading Account -> Funding Account on Bybit.
+Generates a unique transferId (CID) automatically.
+
+Usage:
+  # set env vars (recommended)
+  export BYBIT_API_KEY="your_key"
+  export BYBIT_API_SECRET="your_secret"
+  python transfer.py
+
+If you must hardcode keys (not recommended), see the HARD_CODED section below.
+"""
+import os
+import time
+import uuid
 import logging
+from pybit.unified_trading import HTTP
 
-app = FastAPI()
-logging.basicConfig(level=logging.INFO)
+# ----- CONFIG -----
+AMOUNT = "0.1"
+COIN = "USDT"
 
-@app.get("/")
-def root():
-    return {"message": "Service is alive"}
+# Account type ids used by Bybit Unified API (string values)
+FROM_ACCOUNT_TYPE = "6"  # Unified Trading
+TO_ACCOUNT_TYPE   = "7"  # Funding
 
-@app.api_route("/ping", methods=["GET", "HEAD"])
-async def ping(request: Request):
-    symbol = "TRXUSDT"
-    interval = "5"
-    limit = 1
+# Load API keys from env (recommended)
+API_KEY = os.getenv("BYBIT_API_KEY")
+API_SECRET = os.getenv("BYBIT_API_SECRET")
+TESTNET = os.getenv("BYBIT_TESTNET", "false").lower() in ("1", "true", "yes")
 
-    url = "https://api.bybit.com/v5/market/kline"
-    params = {
-        "category": "linear",
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
+# --- Logging ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("transfer")
 
+# ---- Safety check ----
+if not API_KEY or not API_SECRET:
+    logger.error("Missing API_KEY or API_SECRET. Set BYBIT_API_KEY and BYBIT_API_SECRET in your environment.")
+    raise SystemExit(1)
+
+# --- Create unique transfer id (CID) ---
+def make_transfer_id():
+    # e.g. tr_1694179200123_a3f4b2c1
+    ms = int(time.time() * 1000)
+    short = uuid.uuid4().hex[:8]
+    return f"tr_{ms}_{short}"
+
+transfer_id = make_transfer_id()
+logger.info("Generated transferId (CID) = %s", transfer_id)
+
+# --- Init client ---
+session = HTTP(testnet=TESTNET, api_key=API_KEY, api_secret=API_SECRET)
+
+# --- Perform internal transfer ---
+def send_unified_to_funding(transfer_id, coin, amount, from_acct, to_acct):
     try:
-        response = requests.get(url, params=params)
-        data = response.json()
-
-        if data.get("retCode") != 0:
-            logging.error(f"Bybit API error: {data}")
-            return {"error": "Failed to fetch kline data"}
-
-        kline = data["result"]["list"][0]
-        open_price = kline[1]
-        high_price = kline[2]
-        low_price = kline[3]
-        close_price = kline[4]
-
-        logging.info(f"{symbol} (5m) - Open: {open_price}, High: {high_price}, Low: {low_price}, Close: {close_price}")
-
-        if request.method == "HEAD":
-            return {}
-
-        return {
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price
-        }
-
+        resp = session.create_internal_transfer(
+            transferId=transfer_id,
+            coin=coin,
+            amount=amount,
+            fromAccountType=from_acct,
+            toAccountType=to_acct
+        )
+        logger.info("Transfer response: %s", resp)
+        return resp
     except Exception as e:
-        logging.error(f"Exception: {e}")
-        return {"error": str(e)}
+        logger.exception("Transfer failed: %s", e)
+        raise
+
+if __name__ == "__main__":
+    logger.info("Sending %s %s from Unified(%s) -> Funding(%s)", AMOUNT, COIN, FROM_ACCOUNT_TYPE, TO_ACCOUNT_TYPE)
+    result = send_unified_to_funding(transfer_id, COIN, AMOUNT, FROM_ACCOUNT_TYPE, TO_ACCOUNT_TYPE)
+    logger.info("Done. Check Bybit account history for transferId: %s", transfer_id)
